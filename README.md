@@ -17,7 +17,10 @@ weather/
 │       ├── registry.py
 │       ├── common/
 │       │   ├── __init__.py
-│       │   ├── net.py
+│       │   ├── cleanup.py
+│       │   ├── decompress.py
+│       │   ├── download.py
+│       │   ├── validate.py
 │       │   └── ...
 │       ├── providers/
 │       │   ├── __init__.py
@@ -84,9 +87,13 @@ Pipeline stages per provider:
 Segregation rule:
 
 - `src/weather/common/`: shared mechanics (e.g., HTTP/FTP download helpers,
-  decompression primitives, retry/paging/auth utilities).
+  decompression primitives, retry/rate-limit/auth utilities).
 - `src/weather/providers/<dataset>/`: dataset-specific definitions (variable
   lists, filenames/endpoints, transformations, derived fields, orchestration).
+
+The root `docker-compose.yml` was removed to avoid duplicated container
+definitions. Use `infrastructure/container/docker-compose.yml` as the single
+canonical compose file.
 
 ## Run Paths
 

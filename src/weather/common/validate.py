@@ -79,6 +79,7 @@ def compute_file_hash(
 ) -> str:
     """Compute file hash (streaming for large files)."""
     log = logger or logging.getLogger(__name__)
+    log.debug("Computing %s hash for %s", algo, filepath)
     h = hashlib.new(algo)
     with open(filepath, "rb") as f:
         while chunk := f.read(blocksize):
@@ -166,7 +167,7 @@ def detect_corrupt_files(
         List of files suspected to be corrupt.
     """
     log = logger or logging.getLogger(__name__)
-    corrupt = []
+    corrupt: list[Path] = []
 
     if not directory.exists():
         return corrupt

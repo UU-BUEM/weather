@@ -15,6 +15,16 @@ conda-bld-output/
 conda-bld/
 .conda-bld/
 .conda_history
+.conda/
+
+# Local runtime data and generated artifacts
+data/
+*.sif
+*.nc
+*.nc4
+*.grb
+*.grb.bz2
+*.part
 
 # Environments / virtualenvs
 .venv/

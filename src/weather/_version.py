@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 __all__ = [
-	"__version__",
-	"__version_tuple__",
+    "__version__",
+    "__version_tuple__",
 ]
 
 __version__: str

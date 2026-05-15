@@ -28,8 +28,8 @@ def run_cmd(cmd: list[str], description: str = "") -> tuple[int, str, str]:
         return result.returncode, result.stdout, result.stderr
     except subprocess.TimeoutExpired:
         return 1, "", "Timeout"
-    except Exception as e:
-        return 1, "", str(e)
+    except Exception as exc:
+        return 1, "", str(exc)
 
 
 def check_conda_env(env_name: str = "weather_env") -> bool:
@@ -117,7 +117,7 @@ def check_tests(env_name: str = "weather_env") -> bool:
         "Test suite",
     )
     if code != 0:
-        print(f"  ⚠ Some tests failed (may be expected if data not present)")
+        print(" ⚠ Some tests failed (may be expected if data not present)")
         # Don't fail on test failures - data may not be present
     else:
         print("  ✓ All tests passed")
@@ -162,7 +162,16 @@ def check_docker() -> bool:
 
     # Test CLI in container
     code, out, err = run_cmd(
-        ["docker", "run", "--rm", "weather:test", "python", "-m", "weather", "info"],
+        [
+            "docker",
+            "run",
+            "--rm",
+            "weather:test",
+            "python",
+            "-m",
+            "weather",
+            "info",
+        ],
         "Docker CLI",
     )
     if code != 0:
