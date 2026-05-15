@@ -1,0 +1,100 @@
+[build-system]
+requires = ["setuptools>=68", "wheel", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "weather"
+dynamic = ["version"]
+description = "Provider-based weather data processing pipeline (COSMO-REA6, MERRA-2, ERA5-Land)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.14"
+requires-python = ">=3.12"
+authors = [
+    { name = "Somadutta Sahoo", email = "s.sahoo@uu.nl" },
+]
+keywords = [
+    "weather",
+    "climate",
+    "COSMO-REA6",
+    "MERRA-2",
+    "ERA5",
+    "reanalysis",
+    "HPC",
+    "NetCDF",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+dependencies = [
+    "cfgrib",
+    "dask",
+    "eccodes",
+    "netcdf4",
+    "numpy",
+    "pandas",
+    "pyproj",
+    "python-dotenv",
+    "requests",
+    "urllib3",
+    "scipy",
+    "xarray",
+]
+
+[project.optional-dependencies]
+solar = ["pvlib"]
+parquet = ["pyarrow"]
+era5 = ["cdsapi"]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+    "types-requests",
+]
+
+[project.scripts]
+weather = "weather.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/UU-BUEM/weather"
+Repository = "https://github.com/UU-BUEM/weather"
+"Bug Tracker" = "https://github.com/UU-BUEM/weather/issues"
+
+# ── setuptools ────────────────────────────────────────────────────────────────
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "weather._version.__version__" }
+
+# ── ruff (linter + formatter) ─────────────────────────────────────────────────
+[tool.ruff]
+line-length = 88
+target-version = "py314"
+target-version = "py312"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501"]  # line length handled by formatter
+
+[tool.ruff.lint.isort]
+known-first-party = ["weather"]
+
+# ── mypy ──────────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.14"
+strict = false
+ignore_missing_imports = true
+packages = ["weather"]
+
+# ── pytest ────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"

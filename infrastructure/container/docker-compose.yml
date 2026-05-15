@@ -1,0 +1,43 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Weather Pipeline — Docker Compose (local development / CI)
+# ──────────────────────────────────────────────────────────────────────────────
+# Bind-mounts source code and data so the container never needs to be rebuilt
+# when Python files change.  Rebuild only when weather_env.yml changes.
+#
+# Usage:
+#   docker compose -f infrastructure/container/docker-compose.yml build
+#   docker compose -f infrastructure/container/docker-compose.yml run weather info
+#   docker compose -f infrastructure/container/docker-compose.yml run weather \
+#       run --provider cosmo-rea6 --year 2020 --months 1
+#
+# Environment variables (override in .env at repo root or via shell):
+#   WEATHER_DATA_DIR   Host path for raw/processed data  (default: ../../data)
+#   COSMO_WORK_DIR     Inside-container data root         (default: /data)
+#   WEATHER_PROVIDER   Active provider                    (default: cosmo-rea6)
+# ──────────────────────────────────────────────────────────────────────────────
+
+services:
+  weather:
+    build:
+      context: ../..          # repo root — Dockerfile COPYs from here
+      dockerfile: infrastructure/container/Dockerfile
+    image: weather:latest
+
+    # Source code bind-mounted → code changes take effect without rebuild
+    volumes:
+      - ../../src:/app/src:ro
+      - ${WEATHER_DATA_DIR:-../../data/cosmo_rea6}:/data
+
+    environment:
+      PYTHONPATH: /app/src
+      HDF5_USE_FILE_LOCKING: "FALSE"
+      WEATHER_PROVIDER: ${WEATHER_PROVIDER:-cosmo-rea6}
+      COSMO_WORK_DIR: ${COSMO_WORK_DIR:-/data}
+
+    # Load secrets from .env file at repo root (if present)
+    env_file:
+      - path: ../../.env
+        required: false
+
+    # Default command: show configuration
+    command: ["python", "-m", "weather", "info"]
