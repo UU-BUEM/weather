@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Provider-based weather data processing pipeline (COSMO-REA6, MERRA-2, ERA5-Land)"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 authors = [
     { name = "Somadutta Sahoo", email = "s.sahoo@uu.nl" },
 ]
@@ -26,7 +26,7 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Atmospheric Science",
     "Topic :: Scientific/Engineering :: GIS",
 ]
@@ -78,7 +78,7 @@ write_to = "src/weather/_version.py"
 # ── ruff (linter + formatter) ─────────────────────────────────────────────────
 [tool.ruff]
 line-length = 88
-target-version = "py312"
+target-version = "py314"
 src = ["src"]
 
 [tool.ruff.lint]
@@ -90,7 +90,7 @@ known-first-party = ["weather"]
 
 # ── mypy ──────────────────────────────────────────────────────────────────────
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 strict = false
 ignore_missing_imports = true
 packages = ["weather"]

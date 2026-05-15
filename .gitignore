@@ -28,7 +28,6 @@ data/
 
 # Environments / virtualenvs
 .venv/
-env/
 venv/
 .conda/
 
