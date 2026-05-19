@@ -47,8 +47,8 @@ class MERRA2Provider:
 
     def run_pipeline(self, *args: Any, **kwargs: Any) -> Path:
         raise NotImplementedError(
-            (
+
                 "MERRA-2 pipeline is not implemented yet. "
                 "Use --provider cosmo-rea6 for now."
-            )
+
         )

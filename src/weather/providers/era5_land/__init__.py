@@ -44,8 +44,8 @@ class ERA5LandProvider:
 
     def run_pipeline(self, *args: Any, **kwargs: Any) -> Path:
         raise NotImplementedError(
-            (
+
                 "ERA5-Land pipeline is not implemented yet. "
                 "Use --provider cosmo-rea6 for now."
-            )
+
         )

@@ -21,7 +21,7 @@ jobs:
       - name: Set up Conda
         uses: conda-incubator/setup-miniconda@v3
         with:
-          auto-activate-base: false
+          auto-activate: false
           channels: conda-forge,defaults
           activate-environment: weather_env
           environment-file: infrastructure/env/weather_env.yml
@@ -33,7 +33,7 @@ jobs:
 
       - name: Lint
         shell: bash -l {0}
-        run: ruff check src/ tests/
+        run: ruff check src/
 
       - name: Type check
         shell: bash -l {0}

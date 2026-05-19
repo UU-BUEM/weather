@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from ...common.download import download_ftp_atomic, download_https_atomic
-from .config import ATTRIBUTES, grib_filename, grib_url, get_config
+from .config import ATTRIBUTES, get_config, grib_filename, grib_url
 
 logger = logging.getLogger(__name__)
 

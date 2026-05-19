@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import ftplib
 import logging
 import shutil
@@ -44,9 +45,11 @@ def download_https_atomic(
         suffix=".part",
     )
     try:
-        with open(tmp_fd, "wb") as tmp_f:
-            with urllib.request.urlopen(url, timeout=timeout) as resp:
-                shutil.copyfileobj(resp, tmp_f, length=1 << 20)
+        with (
+            open(tmp_fd, "wb") as tmp_f,
+            urllib.request.urlopen(url, timeout=timeout) as resp,
+        ):
+            shutil.copyfileobj(resp, tmp_f, length=1 << 20)
 
         actual = Path(tmp_path).stat().st_size
         if actual == 0:
@@ -85,10 +88,8 @@ def download_ftp_atomic(
     with ftplib.FTP(host, timeout=timeout) as ftp:
         ftp.login(user=user, passwd=passwd)
         remote_size: int | None = None
-        try:
+        with contextlib.suppress(ftplib.error_perm):
             remote_size = ftp.size(remote_path)
-        except ftplib.error_perm:
-            pass
 
         if (
             dest.exists()

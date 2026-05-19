@@ -97,5 +97,5 @@ packages = ["weather"]
 
 # ── pytest ────────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["src/weather/tests"]
 addopts = "-v --tb=short"

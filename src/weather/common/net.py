@@ -16,7 +16,6 @@ earthdata_auth()                Return NASA Earthdata credentials.
 from __future__ import annotations
 
 # pyright: reportMissingImports=false, reportMissingModuleSource=false
-
 import logging
 import netrc
 import os
@@ -187,7 +186,7 @@ class RateLimiter:
             time.sleep(wait)
         self._last_call = time.monotonic()
 
-    def __enter__(self) -> "RateLimiter":
+    def __enter__(self) -> RateLimiter:
         return self
 
     def __exit__(self, *_: Any) -> None:
@@ -237,7 +236,7 @@ def earthdata_auth() -> tuple[str, str]:
     if creds:
         return creds
 
-    raise EnvironmentError(
+    raise OSError(
         "NASA Earthdata credentials not found.\n"
         "Set EARTHDATA_USERNAME and EARTHDATA_PASSWORD "
         "environment variables,\n"

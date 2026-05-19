@@ -206,10 +206,10 @@ def validate_environment() -> list[str]:
         issues.append("COSMO_MONTHS is empty; no months to process.")
     if cfg["year"] < 1995 or cfg["year"] > 2019:
         issues.append(
-            (
+
                 f"COSMO_YEAR={cfg['year']} is outside COSMO-REA6 range "
                 "(1995-2019)."
-            )
+
         )
 
     return issues
