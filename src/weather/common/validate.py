@@ -130,6 +130,7 @@ def cleanup_directory(
             continue
         if dry_run:
             log.info("[DRY RUN] Would delete: %s", fp)
+            count += 1
         else:
             try:
                 fp.unlink()
