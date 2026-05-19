@@ -1,12 +1,13 @@
 # Conda environment for the weather processing pipeline (standalone).
 #
-# Create (recommended):
+# Create:
 #   conda env create -f infrastructure/env/weather_env.yml
 #   conda activate weather_env
-#   python -m weather info
+#   pip install -e . --no-deps        # install weather from repo root
 #
 # Update an existing environment:
 #   conda env update -n weather_env -f infrastructure/env/weather_env.yml --prune
+#   pip install -e . --no-deps        # re-run if pyproject.toml changed
 #
 name: weather_env
 channels:
@@ -36,4 +37,6 @@ dependencies:
   - pytest-cov=5.*
   - pip
   - pip:
-    - -e .
+    - ruff>=0.6               # linter (dev tool)
+    - mypy>=1.8               # type checker
+    - types-requests          # type stubs for requests

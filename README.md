@@ -110,8 +110,6 @@ For a source checkout, install the package in editable mode first:
 ```bash
 conda env create -f infrastructure/env/weather_env.yml
 conda activate weather_env
-# pip install -e . is run automatically by the env file;
-# re-run manually after updating pyproject.toml dependencies:
 pip install -e .
 ```
 
