@@ -1,8 +1,14 @@
 # Weather
 
+<!-- markdownlint-disable MD013 -->
+[![CI](https://github.com/UU-BUEM/weather/actions/workflows/ci.yml/badge.svg)](https://github.com/UU-BUEM/weather/actions/workflows/ci.yml)
+[![Release](https://github.com/UU-BUEM/weather/actions/workflows/release.yml/badge.svg)](https://github.com/UU-BUEM/weather/actions/workflows/release.yml)
+<!-- markdownlint-enable MD013 -->
+
 Standalone weather processing repository for `UU-BUEM`.
 
-This repository uses a provider-based architecture with a standard Python `src/` layout and separate infrastructure folders for environment and container assets.
+This repository uses a provider-based architecture with a standard Python `src/` layout and
+separate infrastructure folders for environment and container assets.
 
 ## Project Structure
 
@@ -55,8 +61,14 @@ weather/
 │   └── grb.sh
 ├── meta.yaml           # Conda build recipe (at repo root)
 ├── pyproject.toml      # Package metadata & setuptools config
-├── setup.ps1           # Windows setup script
-├── setup.bat           # Windows batch setup
+├── setup.ps1           # Windows PowerShell setup script
+├── setup.bat           # Windows cmd.exe setup script
+├── .github/
+│   ├── workflows/
+│   │   ├── ci.yml      # Lint, type-check, test on push/PR
+│   │   └── release.yml # Build & publish on v* tag
+│   └── agents/
+│       └── uu-buem-align.agent.md
 ├── .gitignore
 ├── LICENSE
 ├── README.md
@@ -91,17 +103,21 @@ Segregation rule:
 - `src/weather/providers/<dataset>/`: dataset-specific definitions (variable
   lists, filenames/endpoints, transformations, derived fields, orchestration).
 
-The root `docker-compose.yml` was removed to avoid duplicated container
-definitions. Use `infrastructure/container/docker-compose.yml` as the single
-canonical compose file.
-
 ## Run Paths
 
-For a source checkout, use `python -m weather ...` with `src/` on
-`PYTHONPATH`.
+For a source checkout, install the package in editable mode first:
 
 ```bash
-export PYTHONPATH=$(pwd)/src
+conda env create -f infrastructure/env/weather_env.yml
+conda activate weather_env
+# pip install -e . is run automatically by the env file;
+# re-run manually after updating pyproject.toml dependencies:
+pip install -e .
+```
+
+Then use `python -m weather ...` or the `weather` console script:
+
+```bash
 python -m weather info
 python -m weather validate
 python -m weather run --provider cosmo-rea6 --months 1
@@ -142,6 +158,8 @@ Default server paths used by scripts:
 - Dockerfile: `infrastructure/container/Dockerfile`
 - Conda recipe: `meta.yaml`
 - Apptainer definition: `infrastructure/container/weather.def`
+- Compose file: `infrastructure/container/docker-compose.yml` (canonical;
+  the root `docker-compose.yml` was removed to avoid duplication)
 
 ## Path Configuration (.env)
 
@@ -155,7 +173,7 @@ Key variables:
 
 - `WEATHER_DATA_DIR` (default fallback: `<repo>/data`)
 - `COSMO_WORK_DIR` (default fallback: `<WEATHER_DATA_DIR>/cosmo_rea6`)
-- `CONDA_BLD_PATH` (recommended: `<repo>/.conda-bld`)
+- `WEATHER_PROVIDER` (default: `cosmo-rea6`)
 
 Build examples:
 

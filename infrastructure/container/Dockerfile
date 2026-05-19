@@ -25,7 +25,7 @@
 #   apptainer pull docker://<registry>/weather:latest
 # ──────────────────────────────────────────────────────────────────────────────
 
-FROM continuumio/miniconda3:latest AS builder
+FROM continuumio/miniconda3:24.1.2-0 AS builder
 
 # Install system tools for decompression
 RUN apt-get update \
@@ -39,7 +39,11 @@ RUN conda env create -f /tmp/weather_env.yml \
     && rm /tmp/weather_env.yml
 
 # ── Runtime stage ─────────────────────────────────────────────────────────
-FROM continuumio/miniconda3:latest
+FROM continuumio/miniconda3:24.1.2-0
+
+LABEL org.opencontainers.image.source="https://github.com/UU-BUEM/weather"
+LABEL org.opencontainers.image.description="Weather pipeline for UU-BUEM"
+LABEL org.opencontainers.image.licenses="MIT"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends lbzip2 pbzip2 curl \

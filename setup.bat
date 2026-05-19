@@ -4,8 +4,7 @@ REM Run from the repository root:
 REM   setup.bat [env_name]
 REM Default env name: weather_env
 REM
-REM Installs the package with:  conda develop src
-REM This makes imports available from src/ for development.
+REM Installs the package in editable mode with:  pip install -e .
 REM Use: python -m weather info
 
 setlocal enabledelayedexpansion
@@ -49,31 +48,31 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM ── Install package (conda develop src — like BuEM) ──────────────────────
+REM ── Install package (editable mode via pip) ──────────────────────────────
 echo.
-echo Installing package with conda develop...
+echo Installing weather package in editable mode...
 set "DATA_ROOT=%REPO_ROOT%data"
 set "COSMO_WORK_DIR=%DATA_ROOT%\cosmo_rea6"
-set "CONDA_BLD_PATH=%REPO_ROOT%.conda-bld"
 
 if not exist "%DATA_ROOT%" mkdir "%DATA_ROOT%"
 if not exist "%COSMO_WORK_DIR%" mkdir "%COSMO_WORK_DIR%"
-if not exist "%CONDA_BLD_PATH%" mkdir "%CONDA_BLD_PATH%"
 
 echo Configuring environment paths...
-conda env config vars set -n "%ENV_NAME%" WEATHER_DATA_DIR="%DATA_ROOT%" COSMO_WORK_DIR="%COSMO_WORK_DIR%" CONDA_BLD_PATH="%CONDA_BLD_PATH%"
+conda env config vars set -n "%ENV_NAME%" WEATHER_DATA_DIR="%DATA_ROOT%" COSMO_WORK_DIR="%COSMO_WORK_DIR%"
 
-conda develop "%REPO_ROOT%src"
+conda run -n "%ENV_NAME%" pip install -e .
 if errorlevel 1 (
-    echo WARNING: conda develop failed. Falling back to PYTHONPATH.
-    conda env config vars set -n "%ENV_NAME%" PYTHONPATH="%REPO_ROOT%src"
-    if errorlevel 1 (
-        echo ERROR: failed to set conda environment variable PYTHONPATH.
-        exit /b 1
-    )
-    echo   PYTHONPATH set. Use: python -m weather info
-) else (
-    echo   Source path registered for imports. Use: python -m weather info
+    echo ERROR: pip install -e . failed -- check output above.
+    exit /b 1
+)
+echo   Package installed. Use: python -m weather info
+
+REM ── Verify installation ───────────────────────────────────────────────────
+echo.
+echo Verifying installation...
+conda run -n "%ENV_NAME%" python -m weather info
+if errorlevel 1 (
+    echo WARNING: Verification failed -- check output above.
 )
 
 REM ── Done ──────────────────────────────────────────────────────────────────

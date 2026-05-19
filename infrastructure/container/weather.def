@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: continuumio/miniconda3:latest
+From: continuumio/miniconda3:24.1.2-0
 
 # ──────────────────────────────────────────────────────────────────────────────
 # COSMO-REA6 Weather Pipeline — Apptainer Definition (deps-only)

@@ -1,0 +1,10 @@
+{
+    "python-envs.defaultEnvManager": "ms-python.python:conda",
+    "python-envs.defaultPackageManager": "ms-python.python:conda",
+    // meta.yaml uses conda-build Jinja2 templating ({% %}, {{ }}), which is
+    // intentionally not valid plain YAML. Reclassify it so the YAML language
+    // server does not report false-positive parse errors.
+    "files.associations": {
+        "meta.yaml": "jinja"
+    }
+}

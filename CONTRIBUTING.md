@@ -100,7 +100,8 @@ conda build . -c conda-forge -c defaults
 
 **Why `weather` (the console script)?**
 
-- When installed as a package, `setuptools` registers the entry point from `pyproject.toml` (`weather = "weather.cli:main"`).
+- When installed as a package, `setuptools` registers the entry point from `pyproject.toml`
+  (`weather = "weather.cli:main"`).
 - This creates a `weather.exe` (Windows) or `weather` script (Unix) in the environment's Scripts/ folder.
 - Users don't need to understand `python -m`; they just run `weather`.
 

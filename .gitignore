@@ -17,6 +17,9 @@ conda-bld/
 .conda_history
 .conda/
 
+# Documentation
+docs/
+
 # Local runtime data and generated artifacts
 data/
 *.sif
@@ -50,7 +53,8 @@ htmlcov/
 *.conda
 
 # IDE
-.vscode/settings.json
+.vscode/*
+!.vscode/settings.json
 .idea/
 
 # OS
@@ -62,3 +66,15 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Local helper scripts
+push.sh
+push.ps1
+.commit-message.md
+
+# Context
+weather_improvement*.txt
+
+# Agents
+.github/agent*
+uu-buem*.md

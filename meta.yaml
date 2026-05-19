@@ -1,6 +1,7 @@
+{% set version = environ.get("GIT_DESCRIBE_TAG", "1.1.0").lstrip("v") %}
 package:
   name: weather
-  version: "0.1.0"
+  version: "{{ version }}"
 
 source:
   path: .
@@ -11,31 +12,29 @@ build:
 
 requirements:
   host:
-    - python >=3.14
+    - python >=3.12
     - pip
     - setuptools >=68
     - setuptools-scm >=8
   run:
-    - python >=3.14
-    - cfgrib
-    - cdsapi
-    - dask
-    - eccodes
-    - netcdf4
-    - numpy
-    - pandas
-    - pyarrow
-    - pvlib
-    - pyproj
-    - python-dotenv
-    - requests
-    - scipy
-    - urllib3
-    - xarray
+    - python >=3.12
+    - cfgrib >=0.9.10
+    - dask >=2024.1
+    - eccodes >=2.34
+    - netcdf4 >=1.6
+    - numpy >=1.26,<3
+    - pandas >=2.0,<3
+    - pyproj >=3.6
+    - python-dotenv >=1.0
+    - requests >=2.31
+    - scipy >=1.12
+    - urllib3 >=2.0
+    - xarray >=2024.1
 
 test:
   imports:
     - weather
+    - weather.providers
   commands:
     - python -m weather info
 

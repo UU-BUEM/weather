@@ -21,7 +21,7 @@ services:
     build:
       context: ../..          # repo root — Dockerfile COPYs from here
       dockerfile: infrastructure/container/Dockerfile
-    image: weather:latest
+    image: weather:${WEATHER_VERSION:-latest}
 
     # Source code bind-mounted → code changes take effect without rebuild
     volumes:

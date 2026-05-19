@@ -1,0 +1,10 @@
+---
+# yamllint configuration for the weather repository.
+# meta.yaml uses Jinja2 templating ({% set ... %}) which conda-build processes
+# before YAML parsing. yamllint cannot handle this syntax, so the file is ignored.
+extends: default
+ignore: |
+  meta.yaml
+rules:
+  line-length:
+    max: 120

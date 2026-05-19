@@ -6,6 +6,9 @@ Provider-based architecture:
   - era5-land   : Copernicus CDS (scaffold)
 """
 
-from ._version import __version__
+try:
+    from ._version import __version__
+except ImportError:
+    __version__ = "1.1.0"
 
 __all__ = ["__version__"]

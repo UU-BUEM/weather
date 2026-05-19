@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Provider-based weather data processing pipeline (COSMO-REA6, MERRA-2, ERA5-Land)"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 authors = [
     { name = "Somadutta Sahoo", email = "s.sahoo@uu.nl" },
 ]
@@ -26,34 +26,34 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Atmospheric Science",
     "Topic :: Scientific/Engineering :: GIS",
 ]
 dependencies = [
-    "cfgrib",
-    "dask",
-    "eccodes",
-    "netcdf4",
-    "numpy",
-    "pandas",
-    "pyproj",
-    "python-dotenv",
-    "requests",
-    "urllib3",
-    "scipy",
-    "xarray",
+    "cfgrib>=0.9.10",
+    "dask>=2024.1",
+    "eccodes>=2.34",
+    "netcdf4>=1.6",
+    "numpy>=1.26,<3",
+    "pandas>=2.0,<3",
+    "pyproj>=3.6",
+    "python-dotenv>=1.0",
+    "requests>=2.31",
+    "urllib3>=2.0",
+    "scipy>=1.12",
+    "xarray>=2024.1",
 ]
 
 [project.optional-dependencies]
-solar = ["pvlib"]
-parquet = ["pyarrow"]
-era5 = ["cdsapi"]
+solar = ["pvlib>=0.10"]
+parquet = ["pyarrow>=15.0"]
+era5 = ["cdsapi>=0.7"]
 dev = [
-    "pytest",
-    "pytest-cov",
-    "ruff",
-    "mypy",
+    "mypy>=1.8",
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.6",
     "types-requests",
 ]
 
@@ -70,15 +70,15 @@ Repository = "https://github.com/UU-BUEM/weather"
 where = ["src"]
 
 [tool.setuptools_scm]
-fallback_version = "0.1.0"
+fallback_version = "1.1.0"
 version_scheme = "guess-next-dev"
 local_scheme = "node-and-date"
-write_to = "src/weather/_version.py"
+version_file = "src/weather/_version.py"
 
 # ── ruff (linter + formatter) ─────────────────────────────────────────────────
 [tool.ruff]
 line-length = 88
-target-version = "py314"
+target-version = "py312"
 src = ["src"]
 
 [tool.ruff.lint]
@@ -90,7 +90,7 @@ known-first-party = ["weather"]
 
 # ── mypy ──────────────────────────────────────────────────────────────────────
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.12"
 strict = false
 ignore_missing_imports = true
 packages = ["weather"]

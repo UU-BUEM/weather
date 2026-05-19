@@ -7,18 +7,19 @@ import pandas as pd
 
 class CsvWeatherData:
     def __init__(self, csv_relative_path=None, cache_path=None):
-        # Resolve repo root: src/weather/ → src/ → repo root
-        repo_root = Path(__file__).parents[2]
-        # Accept absolute paths from env vars; otherwise resolve relative to
-        # the repository root.
         _csv = Path(csv_relative_path)
-        self.csv_path = (
-            _csv if _csv.is_absolute() else repo_root / csv_relative_path
-        )
+        if not _csv.is_absolute():
+            raise ValueError(
+                "csv_relative_path must be an absolute path. "
+                "Relative paths are not supported to ensure "
+                "portable behaviour when the package is installed."
+            )
+        self.csv_path = _csv
         if cache_path:
             _cp = Path(cache_path)
             self.cache_path = (
-                _cp if _cp.is_absolute() else repo_root / cache_path
+                _cp if _cp.is_absolute()
+                else self.csv_path.parent / cache_path
             )
         else:
             self.cache_path = None
@@ -32,7 +33,16 @@ class CsvWeatherData:
         df.index = pd.to_datetime(df.index, utc=True)
         df.index.name = 'datetime'
         if self.cache_path:
-            df.reset_index().to_feather(self.cache_path)
+            try:
+                import pyarrow  # noqa: F401
+                df.reset_index().to_feather(self.cache_path)
+            except ImportError:
+                import warnings
+                warnings.warn(
+                    "pyarrow is not installed; skipping Feather cache. "
+                    "Install with: pip install pyarrow",
+                    stacklevel=2,
+                )
         return df
 
     def extract_weather_columns(self):
@@ -53,9 +63,9 @@ class CsvWeatherData:
     def get_hourly(self, method='mean'):
         """Return hourly resampled data."""
         if method == 'mean':
-            return self.df.resample('H').mean()
+            return self.df.resample('h').mean()
         elif method == 'interpolate':
-            return self.df.resample('H').interpolate()
+            return self.df.resample('h').interpolate()
         else:
             raise ValueError("Unknown method")
 
@@ -136,12 +146,3 @@ class CsvWeatherData:
         df_out["DNI"] = dni_disc
         df_out["DHI"] = dhi_derived
         return df_out
-
-
-if __name__ == "__main__":
-    import time
-    start_time = time.time()
-    loader = CsvWeatherData("data\\COSMO_Year__ix_389_660.csv")
-    df = loader.extract_weather_columns()
-    print(f"total time taken: {time.time() - start_time}")
-    print(f"df: {df}")

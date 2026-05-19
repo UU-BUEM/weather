@@ -2,10 +2,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Usage:  .\setup.ps1 [-EnvName weather_env] [-Force]
 #
-# Installs the package with:  conda develop src
-# This makes imports available from src/ for development.
-# Use `python -m weather ...` in this mode.
-# If conda develop is unavailable, falls back to PYTHONPATH.
+# Installs the package in editable mode with:  pip install -e .
+# Use `python -m weather ...` after activation.
 # ─────────────────────────────────────────────────────────────────────────────
 
 param(
@@ -59,26 +57,30 @@ if ($envExists -and -not $Force) {
     conda env create -f $envYml
 }
 
-# ── Install package (conda develop src — like BuEM) ───────────────────────
+# ── Install package (editable mode via pip) ───────────────────────────────
 Write-Host ""
-Write-Host "Installing package with conda develop..."
-$srcPath = Join-Path $repoRoot "src"
+Write-Host "Installing weather package in editable mode..."
 $dataRoot = Join-Path $repoRoot "data"
 $cosmoWorkDir = Join-Path $dataRoot "cosmo_rea6"
-$condaBldPath = Join-Path $repoRoot ".conda-bld"
 
-New-Item -ItemType Directory -Force -Path $dataRoot, $cosmoWorkDir, $condaBldPath | Out-Null
+New-Item -ItemType Directory -Force -Path $dataRoot, $cosmoWorkDir | Out-Null
 
 Write-Host "Configuring environment paths..."
-conda env config vars set -n $EnvName WEATHER_DATA_DIR=$dataRoot COSMO_WORK_DIR=$cosmoWorkDir CONDA_BLD_PATH=$condaBldPath
+conda env config vars set -n $EnvName WEATHER_DATA_DIR=$dataRoot COSMO_WORK_DIR=$cosmoWorkDir
 
-conda develop $srcPath
+conda run -n $EnvName pip install -e .
 if ($LASTEXITCODE -ne 0) {
-    Write-Warning "conda develop failed (conda-build missing?); falling back to PYTHONPATH."
-    conda env config vars set -n $EnvName PYTHONPATH=$srcPath
-    Write-Host "  PYTHONPATH set. Use: python -m weather info"
-} else {
-    Write-Host "  Source path registered for imports. Use: python -m weather info"
+    Write-Error "pip install -e . failed — check output above."
+    exit 1
+}
+Write-Host "  Package installed. Use: python -m weather info"
+
+# ── Verify installation ───────────────────────────────────────────────────
+Write-Host ""
+Write-Host "Verifying installation..."
+conda run -n $EnvName python -m weather info
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Verification failed — check output above."
 }
 
 # ── Done ──────────────────────────────────────────────────────────────────

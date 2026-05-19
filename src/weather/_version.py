@@ -5,10 +5,19 @@ from __future__ import annotations
 __all__ = [
     "__version__",
     "__version_tuple__",
+    "version",
+    "version_tuple",
+    "__commit_id__",
+    "commit_id",
 ]
 
+version: str
 __version__: str
 __version_tuple__: tuple[int | str, ...]
+version_tuple: tuple[int | str, ...]
+commit_id: str | None
+__commit_id__: str | None
 
-__version__ = "0.1.0"
-__version_tuple__ = (0, 1, 0)
+__version__ = version = "1.1.0"
+__version_tuple__ = version_tuple = (1, 1, 0)
+__commit_id__ = commit_id = None
