@@ -24,6 +24,7 @@ from pathlib import Path
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _add_provider_arg(parser: argparse.ArgumentParser) -> None:
     """Attach ``--provider`` to a subcommand parser."""
     from .registry import list_providers  # deferred — avoids circular import
@@ -100,14 +101,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Year to process (e.g. 2020).",
     )
     run_p.add_argument(
-        "--months",
-        type=int,
-        nargs="+",
-        default=None,
-        metavar="M",
-        help="Month(s) to process, 1-12 (e.g. --months 1 2 3).",
-    )
-    run_p.add_argument(
         "--work-dir",
         default=None,
         metavar="DIR",
@@ -170,7 +163,7 @@ def _cmd_info(args: argparse.Namespace) -> None:
         print(f"  {key:<22s}  {cfg[key]}")
 
     if provider.name == "cosmo-rea6":
-        from .providers.cosmo_rea6.config import ATTRIBUTES
+        from .providers.cosmo_rea6.downloaded_attributes import ATTRIBUTES
 
         print()
         print("Attribute definitions:")
@@ -210,7 +203,6 @@ def _cmd_run(args: argparse.Namespace) -> None:
     )
     nc_path = provider.run_pipeline(
         year=args.year,
-        months=args.months,
         work_dir=Path(args.work_dir) if args.work_dir else None,
         output_path=Path(args.output) if args.output else None,
         include_wind_components=not args.no_wind_components,

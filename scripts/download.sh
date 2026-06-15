@@ -3,13 +3,12 @@
 # COSMO-REA6 — Download GRIB Files from DWD OpenData
 # ──────────────────────────────────────────────────────────────────────────────
 # Downloads compressed GRIB (.grb.bz2) files for all configured attributes
-# and months via HTTPS (curl preferred, wget fallback).
+# and all twelve months via HTTPS (curl preferred, wget fallback).
 # Skips files that already exist locally with the correct remote file size.
 #
 # Usage:
-#   sbatch download.sh                     # SLURM submission (all months)
-#   bash download.sh                       # interactive (all months)
-#   COSMO_MONTHS="01" bash download.sh     # single-month test
+#   sbatch download.sh           # SLURM submission
+#   bash download.sh             # interactive
 #
 # Snellius note: use the "staging" partition for data transfers.
 # ──────────────────────────────────────────────────────────────────────────────
@@ -28,12 +27,8 @@ set -euo pipefail
 # ── Source shared configuration ───────────────────────────────────────────
 source "${COSMO_SCRIPTS_DIR:-${HOME}/weather/scripts}/common.sh"
 
-# Parse months into zero-padded array
-IFS=',' read -ra _MONTHS <<< "${COSMO_MONTHS}"
-MONTHS=()
-for M in "${_MONTHS[@]}"; do
-    MONTHS+=("$(printf "%02d" "$((10#$M))")")
-done
+# Fixed month array — always process the full year
+MONTHS=("01" "02" "03" "04" "05" "06" "07" "08" "09" "10" "11" "12")
 
 mkdir -p "${COSMO_DOWNLOAD_DIR}"
 

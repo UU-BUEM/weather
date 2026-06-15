@@ -34,6 +34,7 @@ dependencies = [
     "cfgrib>=0.9.10",
     "dask>=2024.1",
     "eccodes>=2.34",
+    "matplotlib>=3.10"",
     "netcdf4>=1.6",
     "numpy>=1.26,<3",
     "pandas>=2.0,<3",
@@ -46,6 +47,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+merge = ["h5py>=3.11"]
 solar = ["pvlib>=0.10"]
 parquet = ["pyarrow>=15.0"]
 era5 = ["cdsapi>=0.7"]

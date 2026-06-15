@@ -72,8 +72,8 @@ else
     if conda env list | grep -qw "${ENV_NAME}"; then
         echo "Environment '${ENV_NAME}' already exists — updating."
     else
-        echo "Creating new environment '${ENV_NAME}' with Python 3.14..."
-        conda create -y -n "${ENV_NAME}" python=3.14 -c conda-forge
+        echo "Creating new environment '${ENV_NAME}' with Python 3.12..."
+        conda create -y -n "${ENV_NAME}" python=3.12 -c conda-forge
     fi
 
     echo ""

@@ -10,13 +10,12 @@
 #   ~/weather/data    ->  /data     (download, decompress, output directories)
 #
 # Usage:
-#   sbatch run_pipeline_container.sh                    # full year
-#   sbatch run_pipeline_container.sh --months 1         # single-month test
-#   sbatch run_pipeline_container.sh --skip-download --months 1 2 3
+#   sbatch run_pipeline_container.sh              # full year
+#   sbatch run_pipeline_container.sh --skip-download
 #
-# After code changes — just scp and re-run (no image rebuild needed):
+# After code changes — just rsync and re-run (no image rebuild needed):
 #   rsync -av ./ ssahoo@snellius.surf.nl:~/weather/
-#   sbatch ~/weather/scripts/run_pipeline_container.sh --months 1
+#   sbatch ~/weather/scripts/run_pipeline_container.sh
 #
 # Rebuild the SIF only when weather_env.yml changes:
 #   cd ~/weather && bash scripts/build_container.sh def
@@ -86,7 +85,6 @@ unset LD_PRELOAD 2>/dev/null || true
 #   COSMO_WORK_DIR   — points to /data inside the container
 #   COSMO_NCORES     — inherits SLURM_CPUS_PER_TASK
 #   COSMO_YEAR       — year to process (from host env or default)
-#   COSMO_MONTHS     — months to process (from host env or default)
 #
 # --pwd $PWD is recommended by SURF to avoid symlink path resolution issues.
 #
@@ -98,7 +96,6 @@ apptainer exec \
     --env "COSMO_WORK_DIR=/data" \
     --env "COSMO_NCORES=${SLURM_CPUS_PER_TASK:-16}" \
     --env "COSMO_YEAR=${COSMO_YEAR:-2018}" \
-    --env "COSMO_MONTHS=${COSMO_MONTHS:-01,02,03,04,05,06,07,08,09,10,11,12}" \
     --env "HDF5_USE_FILE_LOCKING=FALSE" \
     "${SIF_PATH}" \
     python -m weather run "$@"

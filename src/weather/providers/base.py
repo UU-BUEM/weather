@@ -20,7 +20,6 @@ class WeatherProvider(Protocol):
     def run_pipeline(
         self,
         year: int | None = None,
-        months: list[int] | None = None,
         attributes: list[str] | None = None,
         *,
         work_dir: Path | None = None,

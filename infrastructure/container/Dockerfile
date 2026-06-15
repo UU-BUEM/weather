@@ -1,28 +1,49 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# Weather Pipeline — Docker Image (deps-only, multi-stage)
+# Weather Pipeline — Docker Image  (COSMO-REA6 / multi-provider, deps-only)
 # ──────────────────────────────────────────────────────────────────────────────
-# Contains the conda environment and system tools ONLY.
-# Source code is bind-mounted at runtime → no rebuild needed for code changes.
+# Multi-stage build:
+#   Stage 1 (builder) — create the conda environment
+#   Stage 2 (runtime) — lean image with only the finished env + entrypoint
 #
+# Source code is BIND-MOUNTED at /app/src at runtime → no rebuild on code edits.
 # Rebuild only when weather_env.yml changes (new/removed packages).
 #
-# Build:
-#   docker build -f infrastructure/container/Dockerfile -t weather .
+# ── Build ──────────────────────────────────────────────────────────────────
+#   docker build -f infrastructure/container/Dockerfile \
+#       -t weather-cosmo-rea6:latest .
 #
-# Run (mount source + data):
+# ── Single-year run ────────────────────────────────────────────────────────
 #   docker run --rm \
-#       -v "$(pwd)/src":/app/src \
-#       -v "$(pwd)/data/cosmo_rea6":/data \
-#       -e COSMO_WORK_DIR=/data \
-#       weather \
-#       python -m weather run --provider cosmo-rea6 --months 1
+#       -v "$(pwd)/src":/app/src:ro \
+#       -v /data/cosmo_rea6:/data \
+#       -e PIPELINE_MODE=single-year \
+#       -e COSMO_YEAR=2005 \
+#       -e COSMO_NCORES=4 \
+#       weather-cosmo-rea6:latest
 #
-# Or use docker-compose (recommended for local development):
-#   docker compose -f infrastructure/container/docker-compose.yml up
+# ── Multi-year run ─────────────────────────────────────────────────────────
+#   docker run --rm \
+#       -v "$(pwd)/src":/app/src:ro \
+#       -v /data/cosmo_rea6:/data \
+#       -e PIPELINE_MODE=multi-year \
+#       -e COSMO_FROM_YEAR=1995 \
+#       -e COSMO_TO_YEAR=2018 \
+#       -e COSMO_NCORES=4 \
+#       weather-cosmo-rea6:latest
 #
-# Use with Apptainer on HPC:
-#   docker push <registry>/weather:latest
-#   apptainer pull docker://<registry>/weather:latest
+# ── Smoke test (no data required) ─────────────────────────────────────────
+#   docker run --rm \
+#       -v "$(pwd)/src":/app/src:ro \
+#       -e PIPELINE_MODE=check \
+#       weather-cosmo-rea6:latest
+#
+# ── docker-compose (recommended) ──────────────────────────────────────────
+#   docker compose -f infrastructure/container/docker-compose.yml \
+#       run cosmo-rea6-check
+#
+# ── Apptainer on HPC (Snellius) ────────────────────────────────────────────
+#   docker push <registry>/weather-cosmo-rea6:latest
+#   apptainer pull docker://<registry>/weather-cosmo-rea6:latest
 # ──────────────────────────────────────────────────────────────────────────────
 
 FROM continuumio/miniconda3:24.1.2-0 AS builder
@@ -38,11 +59,11 @@ RUN conda env create -f /tmp/weather_env.yml \
     && conda clean -afy \
     && rm /tmp/weather_env.yml
 
-# ── Runtime stage ─────────────────────────────────────────────────────────
+# ── Runtime stage ──────────────────────────────────────────────────────────
 FROM continuumio/miniconda3:24.1.2-0
 
 LABEL org.opencontainers.image.source="https://github.com/UU-BUEM/weather"
-LABEL org.opencontainers.image.description="Weather pipeline for UU-BUEM"
+LABEL org.opencontainers.image.description="COSMO-REA6 weather pipeline — UU-BUEM"
 LABEL org.opencontainers.image.licenses="MIT"
 
 RUN apt-get update \
@@ -52,6 +73,10 @@ RUN apt-get update \
 # Copy the pre-built conda environment from builder
 COPY --from=builder /opt/conda/envs/weather_env /opt/conda/envs/weather_env
 
+# Copy entrypoint into the image (not bind-mounted — it is container infrastructure)
+COPY infrastructure/container/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
 # Activate environment
 ENV PATH=/opt/conda/envs/weather_env/bin:$PATH
 ENV CONDA_DEFAULT_ENV=weather_env
@@ -59,10 +84,20 @@ ENV CONDA_DEFAULT_ENV=weather_env
 # Source code is bind-mounted at /app/src at runtime
 ENV PYTHONPATH=/app/src
 
-# Workaround for NetCDF4/HDF5 on NFS/Lustre filesystems
+# Pipeline defaults (overridden by -e or docker-compose environment:)
+ENV PIPELINE_MODE=""
+ENV COSMO_YEAR=2018
+ENV COSMO_FROM_YEAR=1995
+ENV COSMO_TO_YEAR=2018
+ENV COSMO_NCORES=4
+ENV COSMO_PARALLEL_YEARS=1
+ENV COSMO_WORK_DIR=/data
+
+# Prevent HDF5 file-locking deadlocks on GPFS / NFS file systems (HPC)
 ENV HDF5_USE_FILE_LOCKING=FALSE
 
 WORKDIR /app
 
-# Default: show resolved pipeline configuration
-CMD ["python", "-m", "weather", "info"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+# Default: show pipeline configuration (overridden by PIPELINE_MODE)
+CMD []

@@ -8,18 +8,41 @@ Orchestrates the full workflow:
        compute derived fields (GHI, DHI, T, WS_10M).
     4. **Export** — write a single compressed NetCDF-4 file.
 
-Each step is idempotent: re-running skips files that are already present and
-have the expected size.
+Each step is idempotent: re-running skips files that are already
+present and have the expected size.
+
+Pipeline flow
+-------------
+::
+
+    pipeline.run_pipeline(year=YYYY)
+      │
+      ├── Phase 1 — Download (ThreadPoolExecutor, up to ncores workers)
+      │     9 attributes × 12 months = 108 tasks
+      │     DWD OpenData HTTPS  →  download/<attr>/<attr>.2D.<YYYYMM>.grb.bz2
+      │     (skip if bz2 present and valid size)
+      │
+      ├── Phase 2 — Decompress (ProcessPoolExecutor, up to ncores workers)
+      │     108 bz2 files → decompress/<attr>/<attr>.2D.<YYYYMM>.grb
+      │     lbzip2 / pbzip2 / python-bz2 fallback
+      │     Cleanup: delete bz2 after successful decompress
+      │
+      └── Phase 3 — Transform + Export (per month, up to ncores workers)
+            For each of 12 months:
+              cfgrib.open_datasets  →  xarray.Dataset (dask-backed)
+              apply_derived_fields  →  GHI, DHI, T, WS_10M, DNI …
+              export.to_netcdf  →  output/COSMO_REA6_<YYYY>_<MM>_all_attrs.nc
+              cleanup: delete GRIB files for this month
 
 Typical usage (from Python)::
 
-    from buem.weather.pipeline import run_pipeline
-    nc_path = run_pipeline(year=2018, months=[1])  # single-month test
+    from weather.providers.cosmo_rea6.pipeline import run_pipeline
+    nc_path = run_pipeline(year=2018)
 
 From the CLI::
 
-    buem weather run --year 2018 --months 1
-    buem weather run                          # full year (all months)
+    weather run --year 2018
+    weather run           # uses COSMO_YEAR from .env / env var
 """
 
 from __future__ import annotations
@@ -37,7 +60,6 @@ os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
 
 def run_pipeline(
     year: int | None = None,
-    months: list[int] | None = None,
     attributes: list[str] | None = None,
     *,
     work_dir: Path | None = None,
@@ -54,9 +76,6 @@ def run_pipeline(
     ----------
     year : int, optional
         Target year (default from config: 2018).
-    months : list[int], optional
-        Months to process (default from config: 1–12).
-        For a quick test run, pass ``[1]`` for January only.
     attributes : list[str], optional
         COSMO-REA6 attributes (default: all five).
     work_dir : Path, optional
@@ -85,7 +104,6 @@ def run_pipeline(
 
     cfg = get_config()
     year = year or cfg["year"]
-    months = months or cfg["months"]
     attributes = attributes or cfg["attributes"]
 
     # Allow work_dir override
@@ -98,7 +116,6 @@ def run_pipeline(
     logger.info("=" * 60)
     logger.info("COSMO-REA6 Weather Pipeline")
     logger.info("  Year:       %d", year)
-    logger.info("  Months:     %s", months)
     logger.info("  Attributes: %s", attributes)
     logger.info("  Work dir:   %s", cfg["work_dir"])
     logger.info("=" * 60)
@@ -107,7 +124,7 @@ def run_pipeline(
     if not skip_download:
         logger.info("STEP 1/4: Downloading GRIB files")
         t1 = time.perf_counter()
-        download_all(year=year, months=months, attributes=attributes)
+        download_all(year=year, attributes=attributes)
         logger.info("  Download completed in %.1f s", time.perf_counter() - t1)
     else:
         logger.info("STEP 1/4: Download skipped (--skip-download)")
@@ -117,7 +134,7 @@ def run_pipeline(
         logger.info("STEP 2/4: Decompressing GRIB files")
         t2 = time.perf_counter()
         decompress_all(
-            attributes=attributes, year=year, months=months,
+            attributes=attributes, year=year,
         )
         logger.info(
             "  Decompress completed in %.1f s",
@@ -131,7 +148,6 @@ def run_pipeline(
     t3 = time.perf_counter()
     ds = build_annual_dataset(
         year=year,
-        months=months,
         include_wind_components=include_wind_components,
     )
     logger.info("  Transform completed in %.1f s", time.perf_counter() - t3)
@@ -144,7 +160,6 @@ def run_pipeline(
         output_path=output_path,
         complevel=complevel,
         year=year,
-        months=months,
     )
     logger.info("  Export completed in %.1f s", time.perf_counter() - t4)
 
@@ -202,14 +217,79 @@ def validate_environment() -> list[str]:
     # Config sanity
     from .config import get_config
     cfg = get_config()
-    if not cfg["months"]:
-        issues.append("COSMO_MONTHS is empty; no months to process.")
     if cfg["year"] < 1995 or cfg["year"] > 2019:
         issues.append(
-
-                f"COSMO_YEAR={cfg['year']} is outside COSMO-REA6 range "
-                "(1995-2019)."
-
+            f"COSMO_YEAR={cfg['year']} is outside COSMO-REA6 range "
+            "(1995-2019)."
         )
+
+    # Path validation and writable checks
+    path_issues = _validate_paths(cfg)
+    issues.extend(path_issues)
+
+    return issues
+
+
+def _validate_paths(cfg: dict) -> list[str]:
+    """Validate that all required directories exist and are writable.
+
+    Parameters
+    ----------
+    cfg : dict
+        Pipeline configuration dictionary.
+
+    Returns
+    -------
+    list[str]
+        List of path validation issues (empty = all OK).
+    """
+    issues: list[str] = []
+    import os
+
+    # Check work directory
+    work_dir = cfg["work_dir"]
+    try:
+        work_dir.mkdir(parents=True, exist_ok=True)
+    except (OSError, PermissionError) as exc:
+        issues.append(
+            f"Cannot create work directory {work_dir}: {exc}"
+        )
+        return issues
+
+    # Check subdirectories are writable
+    for dir_key in ("download_dir", "decompress_dir", "output_dir"):
+        dir_path = Path(cfg[dir_key])
+        try:
+            dir_path.mkdir(parents=True, exist_ok=True)
+        except (OSError, PermissionError) as exc:
+            issues.append(
+                f"Cannot create {dir_key} {dir_path}: {exc}"
+            )
+            continue
+
+        # Test writability by creating a temporary file
+        try:
+            test_file = dir_path / ".write_test"
+            test_file.touch()
+            test_file.unlink()
+        except (OSError, PermissionError) as exc:
+            issues.append(
+                f"Directory {dir_path} is not writable: {exc}"
+            )
+
+    # Check available disk space (require at least 10GB free)
+    # Only on Unix-like systems (Linux, macOS), not on Windows
+    if hasattr(os, 'statvfs'):
+        try:
+            stat = os.statvfs(work_dir)
+            free_gb = stat.f_bavail * stat.f_frsize / (1024 ** 3)
+            if free_gb < 10:
+                issues.append(
+                    f"Insufficient disk space on {work_dir}: "
+                    f"{free_gb:.1f} GB free (minimum 10 GB required)"
+                    )
+        except (OSError, AttributeError):
+            # statvfs not available on Windows, skip disk space check
+            pass
 
     return issues

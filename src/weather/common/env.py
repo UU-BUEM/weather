@@ -25,23 +25,58 @@ def _resolve_path(raw: str, *, base: Path) -> Path:
     return p.resolve()
 
 
+def _load_dotenv_fallback(path: Path) -> None:
+    """Minimal .env loader used when python-dotenv is not installed.
+
+    Parses ``KEY=VALUE`` lines, skips blank lines and ``#`` comments,
+    strips surrounding quotes from values, and sets ``os.environ``
+    (always overrides, same as ``load_dotenv(..., override=True)``).
+    """
+    with open(path, encoding="utf-8") as fh:
+        for raw_line in fh:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            # Drop inline comments and strip surrounding quotes.
+            value = value.split("#")[0].strip()
+            quoted = (
+                len(value) >= 2
+                and value[0] in ('"', "'")
+                and value[-1] == value[0]
+            )
+            if quoted:
+                value = value[1:-1]
+            if key:
+                os.environ[key] = value
+
+
 def load_repo_env() -> None:
-    """Load .env once from current working directory or repo root."""
+    """Load ``.env`` once, preferring the repo root over the CWD.
+
+    Search order (first file found wins):
+
+    1. ``WEATHER_ENV_FILE`` environment variable (explicit override).
+    2. ``<repo_root>/.env``  — canonical location, consistent regardless
+       of the working directory when the script is launched.
+    3. ``Path.cwd()/.env``  — fallback for non-standard layouts.
+
+    The loaded values override any ambient environment variables so that
+    the ``.env`` file is the authoritative configuration source.
+    CLI-level overrides (e.g. ``os.environ["COSMO_WORK_DIR"] = ...``
+    set *after* imports) still take precedence because they are applied
+    after this function has already run.
+    """
     global _ENV_LOADED
     if _ENV_LOADED:
         return
 
-    try:
-        from dotenv import load_dotenv  # type: ignore
-    except ImportError:
-        _ENV_LOADED = True
-        return
-
     root = repo_root()
-    candidates = [
-        Path.cwd() / ".env",
-        root / ".env",
-    ]
+    candidates: list[Path] = [root / ".env"]
+    cwd_env = Path.cwd() / ".env"
+    if cwd_env != candidates[0]:
+        candidates.append(cwd_env)
 
     env_override = os.environ.get("WEATHER_ENV_FILE", "").strip()
     if env_override:
@@ -49,7 +84,11 @@ def load_repo_env() -> None:
 
     for candidate in candidates:
         if candidate.is_file():
-            load_dotenv(candidate, override=False)
+            try:
+                from dotenv import load_dotenv  # type: ignore
+                load_dotenv(candidate, override=True)
+            except ImportError:
+                _load_dotenv_fallback(candidate)
             break
 
     _ENV_LOADED = True

@@ -6,10 +6,11 @@
 # download finishes.  This is faster than download-all-then-decompress because
 # decompression overlaps with download I/O.
 #
+# All twelve months are always processed.
+#
 # Usage:
-#   sbatch decompress.sh                  # SLURM — all months
-#   COSMO_MONTHS="01,02" sbatch decompress.sh  # specific months
-#   bash decompress.sh                    # interactive
+#   sbatch decompress.sh     # SLURM — full year
+#   bash decompress.sh       # interactive
 # ──────────────────────────────────────────────────────────────────────────────
 
 #SBATCH -J cosmo_dl_decompress
@@ -33,12 +34,8 @@ fi
 CONCURRENT_JOBS=$((COSMO_NCORES / COSMO_THREADS_PER_JOB))
 if [ "${CONCURRENT_JOBS}" -lt 1 ]; then CONCURRENT_JOBS=1; COSMO_THREADS_PER_JOB=1; fi
 
-# Parse months into zero-padded array
-IFS=',' read -ra _MONTHS <<< "${COSMO_MONTHS}"
-MONTHS_PADDED=()
-for M in "${_MONTHS[@]}"; do
-    MONTHS_PADDED+=("$(printf "%02d" "$((10#$M))")")
-done
+# Fixed month array — always process the full year
+MONTHS_PADDED=("01" "02" "03" "04" "05" "06" "07" "08" "09" "10" "11" "12")
 
 DEC_CMD="$(_detect_decompressor)"
 

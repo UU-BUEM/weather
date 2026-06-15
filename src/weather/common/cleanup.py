@@ -13,6 +13,7 @@ def cleanup_work_directory(
     *,
     cleanup_downloads: bool = True,
     cleanup_decompressed: bool = True,
+    cleanup_locks: bool = True,
     dry_run: bool = False,
     logger: logging.Logger | None = None,
 ) -> None:
@@ -21,13 +22,20 @@ def cleanup_work_directory(
     Parameters
     ----------
     work_dir : Path
-        Work directory (e.g., ~/weather_data/cosmo_rea6).
+        Root directory to search (e.g. the download or decompress dir).
+        Files are located recursively so per-attribute subdirectories
+        (e.g. ``work_dir/PS/``, ``work_dir/T_2M/``) are included.
     cleanup_downloads : bool
-        If True, remove .grb.bz2 files.
+        If True, remove ``.grb.bz2`` compressed download files.
     cleanup_decompressed : bool
-        If True, remove .grb files.
+        If True, remove ``.grb`` decompressed GRIB files.
+    cleanup_locks : bool
+        If True, remove cfgrib index/lock files (``.idx``, ``.lock``).
+        cfgrib writes a per-GRIB ``.idx`` sidecar the first time it reads
+        a file; these can be safely deleted and will be regenerated on the
+        next read.
     dry_run : bool
-        If True, log without deleting.
+        If True, log what would be deleted without deleting.
     logger : logging.Logger, optional
         Logger instance.
     """
@@ -37,19 +45,43 @@ def cleanup_work_directory(
         count = validate.cleanup_directory(
             work_dir,
             pattern="*.grb.bz2",
+            recursive=True,
             dry_run=dry_run,
             logger=log,
         )
-        log.info("Cleaned up %d downloaded files.", count)
+        log.info("Cleaned up %d downloaded files (.grb.bz2).", count)
 
     if cleanup_decompressed:
         count = validate.cleanup_directory(
             work_dir,
             pattern="*.grb",
+            recursive=True,
             dry_run=dry_run,
             logger=log,
         )
-        log.info("Cleaned up %d decompressed files.", count)
+        log.info("Cleaned up %d decompressed files (.grb).", count)
+
+    if cleanup_locks:
+        idx_count = validate.cleanup_directory(
+            work_dir,
+            pattern="*.idx",
+            recursive=True,
+            dry_run=dry_run,
+            logger=log,
+        )
+        lock_count = validate.cleanup_directory(
+            work_dir,
+            pattern="*.lock",
+            recursive=True,
+            dry_run=dry_run,
+            logger=log,
+        )
+        total = idx_count + lock_count
+        if total:
+            log.info(
+                "Cleaned up %d lock/index files (%d .idx, %d .lock).",
+                total, idx_count, lock_count,
+            )
 
 
 def detect_and_remove_corrupt_files(

@@ -1,43 +1,144 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# Weather Pipeline — Docker Compose (local development / CI)
+# Weather Pipeline — Docker Compose
 # ──────────────────────────────────────────────────────────────────────────────
-# Bind-mounts source code and data so the container never needs to be rebuilt
-# when Python files change.  Rebuild only when weather_env.yml changes.
+# Source code is bind-mounted; rebuild only when weather_env.yml changes.
 #
-# Usage:
+# ── Build ──────────────────────────────────────────────────────────────────
 #   docker compose -f infrastructure/container/docker-compose.yml build
-#   docker compose -f infrastructure/container/docker-compose.yml run weather info
-#   docker compose -f infrastructure/container/docker-compose.yml run weather \
-#       run --provider cosmo-rea6 --year 2020 --months 1
 #
-# Environment variables (override in .env at repo root or via shell):
-#   WEATHER_DATA_DIR   Host path for raw/processed data  (default: ../../data)
-#   COSMO_WORK_DIR     Inside-container data root         (default: /data)
-#   WEATHER_PROVIDER   Active provider                    (default: cosmo-rea6)
+# ── Smoke test (no data needed — validates imports + unit tests) ───────────
+#   docker compose -f infrastructure/container/docker-compose.yml \
+#       run --rm cosmo-rea6-check
+#
+# ── Single-year COSMO-REA6 (default: 2018, 4 cores) ───────────────────────
+#   docker compose -f infrastructure/container/docker-compose.yml \
+#       run --rm cosmo-rea6-single
+#
+#   Override year / cores at runtime:
+#   COSMO_YEAR=2005 COSMO_NCORES=8 \
+#   docker compose -f infrastructure/container/docker-compose.yml \
+#       run --rm cosmo-rea6-single
+#
+# ── Multi-year COSMO-REA6 (1995-2018, sequential by default) ──────────────
+#   docker compose -f infrastructure/container/docker-compose.yml \
+#       run --rm cosmo-rea6-multi
+#
+#   Parallel (4 years at once, 24 cores each → needs ~120 GB RAM):
+#   COSMO_PARALLEL_YEARS=4 COSMO_NCORES=96 \
+#   docker compose -f infrastructure/container/docker-compose.yml \
+#       run --rm cosmo-rea6-multi
+#
+# ── Post-processing: merge monthly NCs → annual NC ─────────────────────────
+#   COSMO_YEAR=2005 \
+#   docker compose -f infrastructure/container/docker-compose.yml \
+#       run --rm cosmo-rea6-merge
+#
+# ── Percentile representative-year files ──────────────────────────────────
+#   docker compose -f infrastructure/container/docker-compose.yml \
+#       run --rm cosmo-rea6-percentile
+#
+# Environment variables (set in .env at repo root or via shell export):
+#   WEATHER_DATA_DIR      Host path for data directory  (default: ../../data/cosmo_rea6)
+#   COSMO_YEAR            Year for single-year / merge  (default: 2018)
+#   COSMO_FROM_YEAR       Start year for multi-year     (default: 1995)
+#   COSMO_TO_YEAR         End year for multi-year       (default: 2018)
+#   COSMO_NCORES          Total worker cores            (default: 4)
+#   COSMO_PARALLEL_YEARS  Concurrent years              (default: 1)
+#   COSMO_RESUME          Set to 1 to resume a run
+#   COSMO_SKIP_DOWNLOAD   Set to 1 to skip download phase
+#   COSMO_SKIP_DECOMPRESS Set to 1 to skip decompress phase
 # ──────────────────────────────────────────────────────────────────────────────
+
+# ── Shared anchor (reused by all COSMO-REA6 services) ─────────────────────
+x-cosmo-base: &cosmo-base
+  build:
+    context: ../..          # repo root — Dockerfile COPYs from here
+    dockerfile: infrastructure/container/Dockerfile
+  image: weather-cosmo-rea6:${WEATHER_VERSION:-latest}
+  volumes:
+    - ../../src:/app/src:ro
+    - ${WEATHER_DATA_DIR:-../../data/cosmo_rea6}:/data
+  environment:
+    PYTHONPATH: /app/src
+    HDF5_USE_FILE_LOCKING: "FALSE"
+    COSMO_WORK_DIR: /data
+    COSMO_NCORES:          ${COSMO_NCORES:-4}
+    COSMO_RESUME:          ${COSMO_RESUME:-0}
+    COSMO_SKIP_DOWNLOAD:   ${COSMO_SKIP_DOWNLOAD:-0}
+    COSMO_SKIP_DECOMPRESS: ${COSMO_SKIP_DECOMPRESS:-0}
+    COSMO_SKIP_DNI:        ${COSMO_SKIP_DNI:-0}
+    COSMO_NO_CLEANUP:      ${COSMO_NO_CLEANUP:-0}
+  env_file:
+    - path: ../../.env
+      required: false
 
 services:
-  weather:
-    build:
-      context: ../..          # repo root — Dockerfile COPYs from here
-      dockerfile: infrastructure/container/Dockerfile
-    image: weather:${WEATHER_VERSION:-latest}
 
-    # Source code bind-mounted → code changes take effect without rebuild
-    volumes:
-      - ../../src:/app/src:ro
-      - ${WEATHER_DATA_DIR:-../../data/cosmo_rea6}:/data
-
+  # ── Smoke test — validates imports + unit tests, NO data needed ──────────
+  cosmo-rea6-check:
+    <<: *cosmo-base
     environment:
       PYTHONPATH: /app/src
       HDF5_USE_FILE_LOCKING: "FALSE"
-      WEATHER_PROVIDER: ${WEATHER_PROVIDER:-cosmo-rea6}
-      COSMO_WORK_DIR: ${COSMO_WORK_DIR:-/data}
+      COSMO_WORK_DIR: /data
+      PIPELINE_MODE: check
+    volumes:
+      - ../../src:/app/src:ro
+      # no data volume needed for import checks
 
-    # Load secrets from .env file at repo root (if present)
-    env_file:
-      - path: ../../.env
-        required: false
+  # ── Single-year COSMO-REA6 pipeline ─────────────────────────────────────
+  cosmo-rea6-single:
+    <<: *cosmo-base
+    environment:
+      PYTHONPATH: /app/src
+      HDF5_USE_FILE_LOCKING: "FALSE"
+      COSMO_WORK_DIR: /data
+      PIPELINE_MODE: single-year
+      COSMO_YEAR:            ${COSMO_YEAR:-2018}
+      COSMO_NCORES:          ${COSMO_NCORES:-4}
+      COSMO_RESUME:          ${COSMO_RESUME:-0}
+      COSMO_SKIP_DOWNLOAD:   ${COSMO_SKIP_DOWNLOAD:-0}
+      COSMO_SKIP_DECOMPRESS: ${COSMO_SKIP_DECOMPRESS:-0}
+      COSMO_SKIP_DNI:        ${COSMO_SKIP_DNI:-0}
+      COSMO_NO_CLEANUP:      ${COSMO_NO_CLEANUP:-0}
 
-    # Default command: show configuration
-    command: ["python", "-m", "weather", "info"]
+  # ── Multi-year COSMO-REA6 pipeline (1995–2018) ───────────────────────────
+  cosmo-rea6-multi:
+    <<: *cosmo-base
+    environment:
+      PYTHONPATH: /app/src
+      HDF5_USE_FILE_LOCKING: "FALSE"
+      COSMO_WORK_DIR: /data
+      PIPELINE_MODE: multi-year
+      COSMO_FROM_YEAR:       ${COSMO_FROM_YEAR:-1995}
+      COSMO_TO_YEAR:         ${COSMO_TO_YEAR:-2018}
+      COSMO_NCORES:          ${COSMO_NCORES:-4}
+      COSMO_PARALLEL_YEARS:  ${COSMO_PARALLEL_YEARS:-1}
+      COSMO_RESUME:          ${COSMO_RESUME:-0}
+      COSMO_SKIP_DOWNLOAD:   ${COSMO_SKIP_DOWNLOAD:-0}
+      COSMO_SKIP_DECOMPRESS: ${COSMO_SKIP_DECOMPRESS:-0}
+      COSMO_SKIP_DNI:        ${COSMO_SKIP_DNI:-0}
+      COSMO_NO_CLEANUP:      ${COSMO_NO_CLEANUP:-0}
+
+  # ── Post-processing: merge monthly → annual NC ───────────────────────────
+  cosmo-rea6-merge:
+    <<: *cosmo-base
+    environment:
+      PYTHONPATH: /app/src
+      HDF5_USE_FILE_LOCKING: "FALSE"
+      COSMO_WORK_DIR: /data
+      PIPELINE_MODE: merge
+      COSMO_YEAR: ${COSMO_YEAR:-2018}
+
+  # ── Percentile representative-year files (P10 / P50 / P90) ──────────────
+  cosmo-rea6-percentile:
+    <<: *cosmo-base
+    environment:
+      PYTHONPATH: /app/src
+      HDF5_USE_FILE_LOCKING: "FALSE"
+      COSMO_WORK_DIR: /data
+      PIPELINE_MODE: percentile
+      COSMO_FROM_YEAR:     ${COSMO_FROM_YEAR:-1995}
+      COSMO_TO_YEAR:       ${COSMO_TO_YEAR:-2018}
+      COSMO_NCORES:        ${COSMO_NCORES:-4}
+      COSMO_PERCENTILES:   ${COSMO_PERCENTILES:-}

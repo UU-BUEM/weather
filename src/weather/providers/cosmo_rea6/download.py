@@ -2,40 +2,43 @@
 
 Supports two transports:
 
-* **HTTPS** (default) — uses ``urllib.request`` from the standard library;
-  no extra dependencies.  Resume via ``Range`` header is attempted when the
-  server supports it.
-* **FTP** — available as a fallback via :func:`download_ftp`.  Uses
-  :mod:`ftplib` (stdlib).
+* **HTTPS** (default) — uses ``urllib.request``; no extra dependencies.
+  Integrity is verified via ``Content-Length`` before writing so an
+  already-complete file is never re-fetched.
+* **FTP** — available as a fallback via :func:`download_ftp`.
+  Uses :mod:`ftplib` (stdlib).
 
-Both paths perform an **integrity check** by comparing the local file size
-to the remote ``Content-Length`` (HTTPS) or ``SIZE`` (FTP) *before*
-downloading, so an already-complete file is never re-fetched.
+The download logic is encapsulated in
+:class:`~weather.providers.cosmo_rea6.downloader.CosmoDownloader`
+(see :mod:`providers.base_downloader` for the ABC contract).
+Parallel execution is handled by
+:func:`~weather.common.parallel.run_parallel`.
 
 Typical usage::
 
-    from buem.weather.download import download_attribute_month
-    download_attribute_month("SWDIRS_RAD", 2018, 1, dest_dir=Path("/data"))
+    from weather.providers.cosmo_rea6.download import (
+        download_attribute_month,
+    )
+    download_attribute_month("SWDIRS_RAD", 2018, 1)
 """
 
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from ...common.download import download_ftp_atomic, download_https_atomic
-from .config import ATTRIBUTES, get_config, grib_filename, grib_url
+from ...common.download import download_ftp_atomic
+from ...common.parallel import run_parallel
+from ..base_downloader import DownloadJob
+from .config import get_config
+from .downloaded_attributes import ATTRIBUTES
+from .downloader import CosmoDownloader
 
 logger = logging.getLogger(__name__)
 
 
-def _download_https(url: str, dest: Path) -> Path:
-    return download_https_atomic(url, dest, logger=logger)
-
-
 # ---------------------------------------------------------------------------
-# FTP transport (fallback)
+# FTP transport (fallback — HTTPS preferred)
 # ---------------------------------------------------------------------------
 
 def download_ftp(
@@ -74,14 +77,14 @@ def download_attribute_month(
     Parameters
     ----------
     attribute : str
-        Attribute name (must be a key in
-        :data:`~buem.weather.config.ATTRIBUTES`).
+        Must be a key in :data:`.downloaded_attributes.ATTRIBUTES`.
     year : int
         Four-digit year (e.g. 2018).
     month : int
-        Month (1–12).
+        Month (1-12).
     dest_dir : Path, optional
-        Download directory.  Defaults to ``<work_dir>/download/<attribute>/``.
+        Download directory.  Defaults to
+        ``<work_dir>/download/<attribute>/``.
     base_url : str, optional
         Override the DWD base URL.
 
@@ -97,42 +100,43 @@ def download_attribute_month(
     """
     if attribute not in ATTRIBUTES:
         raise ValueError(
-            f"Unknown attribute '{attribute}'.  "
+            f"Unknown attribute {attribute!r}.  "
             f"Valid: {', '.join(sorted(ATTRIBUTES))}"
         )
 
     cfg = get_config()
-    if dest_dir is None:
-        dest_dir = cfg["download_dir"] / attribute
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    if base_url is not None:
+        cfg = {**cfg, "base_url": base_url}
+    if dest_dir is not None:
+        cfg = {**cfg, "download_dir": dest_dir.parent}
 
-    fname = grib_filename(attribute, year, month)
-    url = grib_url(attribute, year, month, base_url=base_url)
-    dest = dest_dir / fname
-
-    return _download_https(url, dest)
+    dl = CosmoDownloader(cfg)
+    job = DownloadJob(attribute=attribute, year=year, month=month)
+    return dl.get(job)
 
 
 def download_all(
     year: int | None = None,
-    months: list[int] | None = None,
     attributes: list[str] | None = None,
     *,
     dest_dir: Path | None = None,
     base_url: str | None = None,
 ) -> list[Path]:
-    """Download all requested GRIB files for a given year.
+    """Download all GRIB files for every attribute across a full year.
+
+    All twelve months (January–December) are always downloaded.
+    Uses :class:`~.downloader.CosmoDownloader` for per-file
+    check-before-fetch and :func:`~weather.common.parallel.run_parallel`
+    for concurrent downloads.
 
     Parameters
     ----------
     year : int, optional
         Year to download (default from config: 2018).
-    months : list[int], optional
-        Months to download (default from config: 1–12).
     attributes : list[str], optional
-        Attributes to download (default from config: all five).
+        Attributes to download (default from config: all).
     dest_dir : Path, optional
-        Root download directory.  Per-attribute sub-directories are created.
+        Override the root download directory.
     base_url : str, optional
         Override DWD base URL.
 
@@ -143,39 +147,29 @@ def download_all(
     """
     cfg = get_config()
     year = year or cfg["year"]
-    months = months or cfg["months"]
     attributes = attributes or cfg["attributes"]
+    if base_url is not None:
+        cfg = {**cfg, "base_url": base_url}
+    if dest_dir is not None:
+        cfg = {**cfg, "download_dir": dest_dir}
 
-    # Build list of (attribute, month) jobs
+    dl = CosmoDownloader(cfg)
     jobs = [
-        (attr, m) for attr in attributes for m in months
+        DownloadJob(attribute=attr, year=year, month=m)
+        for attr in attributes
+        for m in range(1, 13)
     ]
-
-    def _download_one(args: tuple[str, int]) -> Path:
-        attr, m = args
-        return download_attribute_month(
-            attr, year, m, dest_dir=dest_dir, base_url=base_url
-        )
-
-    # Download in parallel — each file goes to a separate server path,
-    # so concurrent connections are safe and ≈N× faster.
-    # Cap at 8 workers to avoid overloading the remote source.
     max_workers = min(len(jobs), cfg["ncores"], 8)
     logger.info(
-        "Downloading %d files with %d parallel workers", len(jobs), max_workers
+        "Downloading %d files with %d workers",
+        len(jobs),
+        max_workers,
     )
-
-    downloaded: list[Path] = []
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_download_one, j): j for j in jobs}
-        for future in as_completed(futures):
-            attr, m = futures[future]
-            try:
-                p = future.result()
-                downloaded.append(p)
-            except Exception:
-                logger.exception("Failed to download %s month %d", attr, m)
-                raise
-
+    downloaded = run_parallel(
+        fn=dl.get,
+        jobs=jobs,
+        max_workers=max_workers,
+        logger=logger,
+    )
     logger.info("Downloaded %d files.", len(downloaded))
     return downloaded

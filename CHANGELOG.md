@@ -2,12 +2,70 @@
 
 All notable changes to this project will be documented in this file.
 
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.2.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
 ## [Unreleased]
+
+## [1.2.0] — 2026-06-15
+
+### Added
+
+- `./infrastructure/container/entrypoint.sh` — routes to the appropriate
+  pipeline script based on the PIPELINE_MODE environment variable.
+- `./src/weather/common/derived_attributes.py` — Cross-provider irradiance
+  derivation (GHI, DHI, DNI).
+- `./src/weather/common/merge.py` — NetCDF-4 / HDF5 monthly-to-annual merge
+  utilities.
+- `./src/weather/common/parallel.py` — Shared thread-pool executor for
+  I/O-bound parallel tasks.
+- `./src/weather/common/percentile_poe.py` and `./src/weather/common/percentile.py`
+  — different method to calculate weather percentile years with P10, P50, and
+  P90 representation.
+- `./src/weather/providers/merra2/` — Scafolding addition related to MERRA2
+  with config.py, downloaded_attributes,py, downloader.py, main.py,
+  base_decompressor.py, base_downloader.py, base_percentile.py,and
+  corresponding README.md files addition.
+- `./src/weather/providers/era5_land/` — Scafolding addition related to
+  config.py, downloaded_attributes,py, and downloader.py similar to
+  MERRA2.
+- `./src/weather/tests/` — added multiple test files to test processing
+  of one month, one year, multi-year, and percentile weather data
+  processing along with integration pipeline testing.
+- `./src/weather/settings.py` — provides a centralized environment for
+  the entire weather pipeline.
+- `setup.sh` — creates or updates the conda environment and installs
+  the package in editable mode.
+
+### Changed
+
+- **workflows**: addition of "on" event that triggers workflow. For
+  ci.yml, this should be triggered when there is a push event on the
+  `main` and `develop` branches. In release.yml, this is triggered with
+  a tag starting with `v`.
+- **container**: changes to `Dockerfile` and `docker-compose.yml`
+  to consider single and multi-year weather data processing.
+- **`weather_env.yml`**: addition of `Jupyter`, `matplotlib=3.10.*`,
+  `lbzip2` and `h5py=3.11.*`.
+- **scripts**: multiple files adjusted for full year processing.
+  Still need to be adjusted for multi-year processing.
+- **`/src/weather/common/`**: ``cleanup.py` updated to adjust the
+  cleanup pattern of downloaded and decompressed files. `download.py`
+  added functions to compute- and save SHA256 checksum of a file.
+  Finally, `env.py` adjusted loading of environment files.
+- **`/src/weather/providers/cosmo_rea6/`**: changes to the pipeline
+  related to parallel processing, multi-year processing, and making
+  download of attributes modular.
+- **`/src/weather/providers/<merra2/era5_land>`**: corresponding
+  `__init__.py` update related to environment path definition.
+- **`setup.ps1` / `setup.bat`**: `conda develop src` replaced with
+  `conda run -n $EnvName pip install -e .`; `CONDA_BLD_PATH` configuration
+  removed.
+- **environment**: `.pyproject.toml` and `meta.yaml` update related to
+  pip install due to addition of new python packages. `MD018` set to
+  `false` in `.markdownlint.json`.
 
 ---
 

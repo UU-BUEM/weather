@@ -24,7 +24,6 @@ class CosmoREA6Provider:
     def run_pipeline(
         self,
         year: int | None = None,
-        months: list[int] | None = None,
         attributes: list[str] | None = None,
         *,
         work_dir: Path | None = None,
@@ -37,7 +36,6 @@ class CosmoREA6Provider:
     ) -> Path:
         return run_cosmo_pipeline(
             year=year,
-            months=months,
             attributes=attributes,
             work_dir=work_dir,
             output_path=output_path,

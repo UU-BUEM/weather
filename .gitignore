@@ -78,3 +78,6 @@ weather_improvement*.txt
 # Agents
 .github/agent*
 uu-buem*.md
+
+# Unnecessary files
+src/weather/providers/main.py

@@ -16,20 +16,23 @@ separate infrastructure folders for environment and container assets.
 weather/
 ├── src/
 │   └── weather/
-│       ├── __init__.py
-│       ├── __main__.py
-│       ├── _version.py
-│       ├── cli.py
-│       ├── registry.py
 │       ├── common/
 │       │   ├── __init__.py
 │       │   ├── cleanup.py
 │       │   ├── decompress.py
+|       |   ├── derived_attributes.py
 │       │   ├── download.py
-│       │   ├── validate.py
-│       │   └── ...
+|       |   ├── env.py
+|       |   ├── merge.py
+|       |   ├── parallel.py
+|       |   ├── percentile_poe.py
+│       │   ├── percentile.py
+│       │   └── validate.py
 │       ├── providers/
 │       │   ├── __init__.py
+|       |   ├── base_decompressor.py
+|       |   ├── base_downloader.py
+|       |   ├── base_percentile.py
 │       │   ├── base.py
 │       │   ├── cosmo_rea6/
 │       │   │   ├── __init__.py
@@ -40,29 +43,53 @@ weather/
 │       │   │   ├── export.py
 │       │   │   └── pipeline.py
 │       │   ├── merra2/
-│       │   │   └── __init__.py
+│       │   │   ├── __init__.py
+|       |   |   ├── config.py
+|       |   |   ├── downloaded_attributes.py
+|       |   |   └── downloader.py
 │       │   └── era5_land/
-│       │       └── __init__.py
-│       └── from_csv.py
+│       │       ├── __init__.py
+|       |       ├── config.py
+|       |       ├── downloaded_attributes.py
+|       |       └──downloader.py
+|       ├── tests/
+|       |   ├── test_derived_attributes.py
+|       |   ├── test_multi_year.py
+|       |   ├── test_one_month.py
+|       |   ├── test_one_year.py
+|       |   ├── test_percentile_poe.py
+|       |   ├── test_percentile.py
+|       |   ├── test_pipeline_integration.py
+|       |   └── test_validation.py
+│       ├── __init__.py
+│       ├── __main__.py
+│       ├── _version.py
+│       ├── cli.py
+│       ├── from_csv.py 
+|       ├── registry.py 
+│       └── settings.py
 ├── infrastructure/
 │   ├── env/
 │   │   └── weather_env.yml
 │   └── container/
 │       ├── Dockerfile
-│       └── docker-compose.yml
+│       ├── docker-compose.yml
+|       ├── entrypoint.sh
+|       └── weather.def
 ├── scripts/
-│   ├── common.sh
-│   ├── setup_env.sh
-│   ├── run_pipeline.sh
-│   ├── run_pipeline_container.sh
 │   ├── build_container.sh
-│   ├── download.sh
-│   ├── decompress.sh
-│   └── grb.sh
+│   ├── common.sh  
+│   ├── decompress.sh 
+│   ├── download.sh 
+│   ├── grb.sh build_container.sh
+│   ├── run_pipeline_container.sh 
+│   ├── run_pipeline.sh
+│   └── setup_env.sh
 ├── meta.yaml           # Conda build recipe (at repo root)
 ├── pyproject.toml      # Package metadata & setuptools config
 ├── setup.ps1           # Windows PowerShell setup script
 ├── setup.bat           # Windows cmd.exe setup script
+├── setup.sh            # For local Linux/macOS and HPC systems
 ├── .github/
 │   ├── workflows/
 │   │   ├── ci.yml      # Lint, type-check, test on push/PR
@@ -129,6 +156,37 @@ weather info
 weather validate
 weather run --provider cosmo-rea6 --months 1
 ```
+
+The pipeline for single year and multi-year is also ready now.
+For executing this, the following test files need to be executed.
+
+```bash
+python ./src/weather/tests/test_one_year.py
+```
+
+```text
+  --year (default: 2018)
+  --months (default: None)
+  --ncores
+  ...
+```
+
+and
+
+```bash
+python ./src/weather/tests/test_multi_year.py
+```
+
+with the following flags:
+
+```text
+  --from-year (default: 1995)
+  --to-year (inclusive) (default: 2018)
+  --ncores
+  ...
+```
+
+The rest can be checked with `--help` or `-h`
 
 Default provider can be set with:
 

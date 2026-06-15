@@ -3,58 +3,37 @@
 Three strategies are supported — chosen automatically or via the
 ``COSMO_DECOMPRESSOR`` environment variable:
 
-1. **pbzip2** — parallel BZIP2 (fastest on multi-core servers).
-2. **lbzip2** — alternative parallel BZIP2.
+1. **lbzip2** — parallel BZIP2 (preferred; lowest per-thread overhead).
+2. **pbzip2** — parallel BZIP2 (fallback if lbzip2 is absent).
 3. **Python bz2** — stdlib fallback; no external tools needed.
 
-The decompressor writes to a temporary file and atomically renames it to
-the target name, so a crash never leaves a half-written GRIB file.
+The decompressor writes to a temporary file and atomically renames it
+to the target name, so a crash never leaves a half-written GRIB file.
+
+:func:`decompress_all` uses
+:class:`~weather.providers.cosmo_rea6.decompressor.CosmoDecompressor`
+for check-before-decompress logic and
+:func:`~weather.common.parallel.run_parallel` for concurrent execution.
 
 Typical usage::
 
-    from buem.weather.decompress import decompress_file
+    from weather.providers.cosmo_rea6.decompress import decompress_file
     grb = decompress_file(Path("SWDIRS_RAD.2D.201801.grb.bz2"))
 """
 
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from ...common.decompress import decompress_bz2_file, detect_decompressor
+from ...common.decompress import decompress_bz2_file
+from ...common.parallel import run_parallel
+from ..base_downloader import DownloadJob
 from .config import get_config
+from .decompressor import CosmoDecompressor
 
 logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# Decompressor detection
-# ---------------------------------------------------------------------------
-
-def _detect_decompressor() -> str:
-    """Return the best available decompressor command name.
-
-    Checks ``COSMO_DECOMPRESSOR`` env var first, then probes the ``PATH``
-    for ``lbzip2`` and ``pbzip2`` in order.  Falls back to ``"python"``
-    which triggers the pure-Python :mod:`bz2` path.
-
-    lbzip2 is preferred over pbzip2 because it scales better with many
-    cores and has lower per-thread overhead.
-
-    Returns
-    -------
-    str
-        One of ``"lbzip2"``, ``"pbzip2"``, or ``"python"``.
-    """
-    cfg = get_config()
-    preferred = cfg["decompressor"]
-    return detect_decompressor(preferred=preferred)
-
-
-# ---------------------------------------------------------------------------
-# Per-strategy decompression
-# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -109,10 +88,11 @@ def decompress_all(
     dest_dir: Path | None = None,
     attributes: list[str] | None = None,
     year: int | None = None,
-    months: list[int] | None = None,
     threads: int | None = None,
 ) -> list[Path]:
-    """Decompress all ``.grb.bz2`` files for the configured attributes/year.
+    """Decompress all ``.grb.bz2`` files for a full year.
+
+    All twelve months (January–December) are always processed.
 
     Parameters
     ----------
@@ -124,8 +104,8 @@ def decompress_all(
         Root directory for decompressed output
         (per-attribute sub-dirs created).
         Defaults to ``<work_dir>/decompress/``.
-    attributes, year, months : optional
-        Override the defaults from :func:`~buem.weather.config.get_config`.
+    attributes, year : optional
+        Override config defaults.
     threads : int, optional
         Threads per decompress job.
 
@@ -134,62 +114,55 @@ def decompress_all(
     list[Path]
         Paths to all decompressed ``.grb`` files.
     """
-    from .config import grib_filename
-
     cfg = get_config()
     src_dir = src_dir or cfg["download_dir"]
-    dest_dir = dest_dir or cfg["decompress_dir"]
     attributes = attributes or cfg["attributes"]
     year = year or cfg["year"]
-    months = months or cfg["months"]
+    if dest_dir is not None:
+        cfg = {**cfg, "decompress_dir": dest_dir}
+    if threads is not None:
+        cfg = {**cfg, "threads_per_job": threads}
 
-    jobs: list[tuple[Path, Path]] = []
+    # Build DownloadJob list — skip jobs whose source file is absent.
+    from .naming import grib_filename
+
+    dc = CosmoDecompressor(cfg)
+    jobs: list[DownloadJob] = []
     for attr in attributes:
-        for m in months:
+        for m in range(1, 13):
             bz2_name = grib_filename(attr, year, m)
             bz2_path = src_dir / attr / bz2_name
             if not bz2_path.exists():
-                logger.warning("Missing compressed file: %s", bz2_path)
+                logger.warning(
+                    "Missing compressed file: %s", bz2_path
+                )
                 continue
-            jobs.append((bz2_path, dest_dir / attr))
+            jobs.append(
+                DownloadJob(attribute=attr, year=year, month=m)
+            )
 
     if not jobs:
         logger.warning("No files found to decompress.")
         return []
 
-    # Strategy: decompress multiple files concurrently, dividing total
-    # cores across concurrent jobs.  For N files and C total cores:
-    #   - parallel_files = min(N, max(2, C // 4))
-    #   - threads_per_file = max(1, C // parallel_files)
-    # This keeps all cores busy while avoiding I/O contention.
+    # Strategy: decompress multiple files concurrently.
+    # For N files and C total cores:
+    #   parallel_files = min(N, max(2, C // 4))
+    #   threads_per_file = max(1, C // parallel_files)
     ncores = cfg["ncores"]
     n_files = len(jobs)
     parallel_files = min(n_files, max(2, ncores // 4))
-    threads_per_file = threads or max(1, ncores // parallel_files)
-
-    decompressor = _detect_decompressor()
     logger.info(
-        "Decompressing %d files: %d concurrent jobs × %d threads (%s)",
-        n_files, parallel_files, threads_per_file, decompressor,
+        "Decompressing %d files: %d concurrent jobs",
+        n_files,
+        parallel_files,
     )
 
-    def _do_decompress(args: tuple[Path, Path]) -> Path:
-        bz2_path, out_dir = args
-        return decompress_file(
-            bz2_path, dest_dir=out_dir, threads=threads_per_file,
-        )
-
-    output_paths: list[Path] = []
-    with ThreadPoolExecutor(max_workers=parallel_files) as pool:
-        futures = {pool.submit(_do_decompress, j): j for j in jobs}
-        for future in as_completed(futures):
-            bz2_path, _ = futures[future]
-            try:
-                grb = future.result()
-                output_paths.append(grb)
-            except Exception:
-                logger.exception("Failed to decompress %s", bz2_path)
-                raise
-
+    output_paths = run_parallel(
+        fn=dc.get,
+        jobs=jobs,
+        max_workers=parallel_files,
+        logger=logger,
+    )
     logger.info("Decompressed %d files.", len(output_paths))
     return output_paths

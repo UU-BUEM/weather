@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import pandas as pd  # noqa: F401
+    import pandas as pd  # noqa: F401  # type: ignore[import-untyped]
     import xarray  # noqa: F401  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,6 @@ def export_netcdf(
     *,
     complevel: int = 1,
     year: int | None = None,
-    months: list[int] | None = None,
 ) -> Path:
     """Write the processed dataset to a compressed NetCDF-4 file.
 
@@ -72,15 +71,12 @@ def export_netcdf(
         Processed annual weather dataset.
     output_path : Path, optional
         Full path for the output file.  If omitted, defaults to
-        ``<work_dir>/output/COSMO_REA6_<year>.nc`` for a full year, or
-        ``<work_dir>/output/COSMO_REA6_<year>_Jan.nc`` for a single month.
+        ``<work_dir>/output/COSMO_REA6_<year>.nc``.
     complevel : int
         zlib compression level (default 1 — fastest; levels 2–9 give
         minimal size reduction for much higher CPU cost on large grids).
     year : int, optional
         Year label for the default filename.
-    months : list[int], optional
-        Months being processed — used for filename generation.
 
     Returns
     -------
@@ -88,24 +84,10 @@ def export_netcdf(
         Path to the written NetCDF file.
     """
     if output_path is None:
-        import calendar
-
         from .config import get_config
         cfg = get_config()
         yr = year or cfg["year"]
-        mo = months or cfg["months"]
-        if len(mo) == 12:
-            # Full year → COSMO_REA6_2018.nc
-            fname = f"COSMO_REA6_{yr}.nc"
-        elif len(mo) == 1:
-            # Single month → COSMO_REA6_2018_Jan.nc
-            month_abbr = calendar.month_abbr[mo[0]]
-            fname = f"COSMO_REA6_{yr}_{month_abbr}.nc"
-        else:
-            # Multiple months → COSMO_REA6_2018_Jan-Mar.nc
-            first = calendar.month_abbr[mo[0]]
-            last = calendar.month_abbr[mo[-1]]
-            fname = f"COSMO_REA6_{yr}_{first}-{last}.nc"
+        fname = f"COSMO_REA6_{yr}.nc"
         output_path = cfg["output_dir"] / fname
 
     if output_path.exists() and output_path.stat().st_size > 0:

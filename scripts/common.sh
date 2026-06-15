@@ -57,7 +57,6 @@ export COSMO_OUTPUT_DIR="${COSMO_WORK_DIR}/output"
 
 # ── Default pipeline parameters ──────────────────────────────────────────
 export COSMO_YEAR="${COSMO_YEAR:-2018}"
-export COSMO_MONTHS="${COSMO_MONTHS:-01,02,03,04,05,06,07,08,09,10,11,12}"
 export COSMO_BASE_URL="${COSMO_BASE_URL:-https://opendata.dwd.de/climate_environment/REA/COSMO_REA6/hourly/2D}"
 
 # Attributes array (not exported — sourced into the calling script)
