@@ -236,6 +236,7 @@ def _verify_downloads(
         ThreadPoolExecutor,
         as_completed,
     )
+
     from weather.common.download import (  # noqa: PLC0415
         remote_size_https,
     )
@@ -464,6 +465,8 @@ def main() -> None:  # noqa: C901 — intentionally long (pipeline steps)
 
     # Imports first so load_repo_env() runs (triggered by settings.py at
     # import time).  CLI overrides applied after so they win over .env.
+    import dask  # noqa: PLC0415
+
     from weather.common.env import repo_root as _repo_root
     from weather.providers.cosmo_rea6.config import get_config
     from weather.providers.cosmo_rea6.export import export_netcdf
@@ -478,6 +481,7 @@ def main() -> None:  # noqa: C901 — intentionally long (pipeline steps)
         convert_temperature,
         open_grib_month,
     )
+
     # Shared helpers — import after path bootstrap to avoid circular issues.
     # logging.basicConfig in test_one_month is a no-op here (already set).
     from weather.tests.test_one_month import (  # noqa: PLC0415
@@ -485,7 +489,6 @@ def main() -> None:  # noqa: C901 — intentionally long (pipeline steps)
         _log_dni_stats,
         _report_dni_outliers,
     )
-    import dask  # noqa: PLC0415
 
     # CLI overrides win over .env values (applied after load_repo_env).
     if args.work_dir:

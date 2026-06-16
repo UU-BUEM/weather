@@ -1,7 +1,8 @@
-import xarray as xr
 # from weather.providers.cosmo_rea6.config import get_config
 import logging
 import os
+
+import xarray as xr
 
 """COSMO-REA6 percentile file generator."""
 

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import ftplib
+import hashlib
 import logging
 import random
 import shutil
@@ -188,33 +188,32 @@ def download_https_atomic(
     expected = remote_size_https(url)
 
     # Check if file already exists and is valid
-    if dest.exists():
-        if expected and dest.stat().st_size == expected:
-            # Verify checksum if requested and checksum file exists
-            if compute_checksum:
-                stored_checksum = load_checksum(dest)
-                if stored_checksum:
-                    if verify_checksum(dest, stored_checksum):
-                        log.info(
-                            "Already downloaded (size & checksum OK): %s",
-                            dest.name,
-                        )
-                        return dest
-                    else:
-                        log.warning(
-                            "Checksum mismatch for existing file %s, "
-                            "re-downloading",
-                            dest.name,
-                        )
-                else:
+    if dest.exists() and expected and dest.stat().st_size == expected:
+        # Verify checksum if requested and checksum file exists
+        if compute_checksum:
+            stored_checksum = load_checksum(dest)
+            if stored_checksum:
+                if verify_checksum(dest, stored_checksum):
                     log.info(
-                        "Already downloaded (size OK, no checksum): %s",
+                        "Already downloaded (size & checksum OK): %s",
                         dest.name,
                     )
                     return dest
+                else:
+                    log.warning(
+                        "Checksum mismatch for existing file %s, "
+                        "re-downloading",
+                        dest.name,
+                    )
             else:
-                log.info("Already downloaded (size OK): %s", dest.name)
+                log.info(
+                    "Already downloaded (size OK, no checksum): %s",
+                    dest.name,
+                )
                 return dest
+        else:
+            log.info("Already downloaded (size OK): %s", dest.name)
+            return dest
 
     last_exc: BaseException | None = None
     for attempt in range(max_retries + 1):

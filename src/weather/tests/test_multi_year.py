@@ -233,7 +233,7 @@ def _parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    import os    # noqa: PLC0415
+    import os  # noqa: PLC0415
     import time  # noqa: PLC0415
 
     args = _parse_args()

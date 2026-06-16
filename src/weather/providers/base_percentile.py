@@ -43,8 +43,9 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -79,7 +80,7 @@ class BasePercentileAnalyzer(ABC):
     # ------------------------------------------------------------------
 
     @abstractmethod
-    def annual_metric(self, ds: "xr.Dataset") -> "xr.DataArray":
+    def annual_metric(self, ds: xr.Dataset) -> xr.DataArray:
         """Compute the scalar ranking metric per cell for one year.
 
         Parameters
@@ -95,7 +96,7 @@ class BasePercentileAnalyzer(ABC):
         """
 
     @abstractmethod
-    def load_annual_dataset(self, year: int) -> "xr.Dataset":
+    def load_annual_dataset(self, year: int) -> xr.Dataset:
         """Open the annual processed NetCDF for *year* (lazy, dask-backed).
 
         Parameters
@@ -263,8 +264,8 @@ class BasePercentileAnalyzer(ABC):
         Path
             *output_path* after writing.
         """
-        import xarray as xr
         import numpy as np
+        import xarray as xr
 
         n_hours = self.standard_time_hours()
         unique_years = sorted(

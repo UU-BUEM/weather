@@ -306,7 +306,7 @@ def _parse_args() -> argparse.Namespace:
 
 def _main() -> None:
     import glob  # noqa: PLC0415
-    import sys   # noqa: PLC0415
+    import sys  # noqa: PLC0415
 
     logging.basicConfig(
         level=logging.INFO,

@@ -86,13 +86,13 @@ import logging
 import os
 import sys
 import time
-from typing import TYPE_CHECKING
 from concurrent.futures import (
     ProcessPoolExecutor,
     ThreadPoolExecutor,
     as_completed,
 )
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import xarray
@@ -212,8 +212,8 @@ def _pipeline_download_decompress(
     dict[str, Path]
         Mapping ``attr → decompressed .grb path``.
     """
-    from weather.providers.cosmo_rea6.download import download_attribute_month
     from weather.providers.cosmo_rea6.decompress import decompress_file
+    from weather.providers.cosmo_rea6.download import download_attribute_month
 
     n = len(attrs)
     dl_workers = min(n, max(1, ncores // 2))

@@ -110,7 +110,7 @@ def _open_grib_robust(
                     grb_path.name, uv_flag,
                 )
                 return ds
-        except (OSError, IOError) as exc:
+        except OSError as exc:
             # File I/O errors - log and continue to next flag
             logger.debug(
                 "uvRelativeToGrid=%d failed for %s: %s",

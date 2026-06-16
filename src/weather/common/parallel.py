@@ -19,8 +19,9 @@ Typical usage::
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Callable, Sequence
+from typing import Any
 
 _log = logging.getLogger(__name__)
 

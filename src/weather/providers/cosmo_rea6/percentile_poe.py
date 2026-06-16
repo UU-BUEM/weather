@@ -169,10 +169,7 @@ class CosmoPoEAnalyzer:
             acc = None
             for month in months:
                 m_sum = self._load_monthly_ghi_sum(year, month)
-                if acc is None:
-                    acc = m_sum
-                else:
-                    acc = acc + m_sum
+                acc = m_sum if acc is None else acc + m_sum
             if acc is None:
                 raise RuntimeError("No months provided for annual metric.")
             slices.append(acc.astype(np.float32))
