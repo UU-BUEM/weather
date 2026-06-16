@@ -33,15 +33,15 @@ jobs:
 
       - name: Lint
         shell: bash -l {0}
-        run: ruff check src/
+        run: python -m ruff check src/
 
       - name: Type check
         shell: bash -l {0}
-        run: mypy src
+        run: python -m mypy src
 
       - name: Test with coverage
         shell: bash -l {0}
-        run: pytest -q --cov=weather --cov-report=xml
+        run: python -m pytest -q --cov=weather --cov-report=xml
 
       - name: Smoke test CLI
         shell: bash -l {0}

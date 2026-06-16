@@ -86,6 +86,10 @@ class TestPathValidationIntegration:
             issues = _validate_paths(cfg)
             assert len(issues) == 0
 
+    @pytest.mark.skipif(
+        not hasattr(__import__("os"), "statvfs"),
+        reason="chmod writability check only works on Unix",
+    )
     def test_validate_non_writable_directory(self):
         """Test that non-writable directories are detected."""
         from weather.providers.cosmo_rea6.pipeline import _validate_paths
@@ -124,8 +128,11 @@ class TestTransformErrorHandling:
         with tempfile.TemporaryDirectory() as tmpdir:
             non_existent = Path(tmpdir) / "nonexistent.grb"
 
-            # Mock xarray to avoid import errors
+            # Simulate what real xarray/cfgrib raises for a missing file
             mock_xr = Mock()
+            mock_xr.open_dataset.side_effect = FileNotFoundError(
+                f"No such file: {non_existent}"
+            )
 
             with pytest.raises(RuntimeError, match="Failed to open GRIB file"):
                 _open_grib_robust(non_existent, "T_2M", mock_xr)
