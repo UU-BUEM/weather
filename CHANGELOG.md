@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-06-28
+
+### Added
+
+- Included a docs folder with the following files:
+  `debugging.md`, `dni_methodology.md`, `git-push-workflow.md`,
+  `parallelization.md`, `percentile_methodology.md`, and `qa.md`.
+- `./src/weather/providers/cosmo_rea6/percentile_index.py` — calculates
+  percentiles (P10, P50, and P90) using the FH method and GHI as the
+  basis for each cell and each month.
+
+### Changed
+
+- Added versions to python packages in weather_env.yml.
+- Added `relative humidity` attribute to `downloaded_attributes.py`
+  of `cosmo-rea6`, `era5_land`, and `merra2` submodules.
+- Minor updates to .gitignore, CONTRIBUTING.md, and README.md
+
 ## [1.2.0] — 2026-06-15
 
 ### Added

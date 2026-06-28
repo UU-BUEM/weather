@@ -24,12 +24,50 @@ from __future__ import annotations
 #   conversion   – symbolic note on applied transform
 
 ATTRIBUTES: dict[str, dict[str, str]] = {
+    "H_SNOW": {
+        "dwd_name": "H_SNOW",
+        "description": "thickness of snow",
+        "unit_raw": "m",
+        "unit_target": "m",
+        "conversion": "none (already in meters (m))",
+    },
     "PS": {
         "dwd_name": "PS",
         "description": "surface pressure",
         "unit_raw": "Pa",
         "unit_target": "Pa",
         "conversion": "none (already in Pascals (Pa))",
+    },
+    "RELHUM_2M": {
+        "dwd_name": "RELHUM_2M",
+        "description": "relative humidity at 2 m above ground",
+        "unit_raw": "%",
+        "unit_target": "%",
+        "conversion": "none (already in percent (%))",
+    },
+    "SNOW_CON": {
+        "dwd_name": "SNOW_CON",
+        "description": (
+            "convective snow "
+            "(convective precipitation accumulated over the hour)"
+        ),
+        "unit_raw": "kg/m^2",
+        "unit_target": "kg/m^2",
+        "conversion": (
+            "none (already in kg per square meter (kg/m^2))"
+        ),
+    },
+    "SNOW_GSP": {
+        "dwd_name": "SNOW_GSP",
+        "description": (
+            "stratiform snow "
+            "(grid-scale precipitation accumulated over the hour)"
+        ),
+        "unit_raw": "kg/m^2",
+        "unit_target": "kg/m^2",
+        "conversion": (
+            "none (already in kg per square meter (kg/m^2))"
+        ),
     },
     "SWDIFDS_RAD": {
         "dwd_name": "SWDIFDS_RAD",
@@ -77,36 +115,5 @@ ATTRIBUTES: dict[str, dict[str, str]] = {
         "unit_raw": "m/s",
         "unit_target": "m/s",
         "conversion": "kept as-is in rotated-pole coordinates",
-    },
-    "H_SNOW": {
-        "dwd_name": "H_SNOW",
-        "description": "thickness of snow",
-        "unit_raw": "m",
-        "unit_target": "m",
-        "conversion": "none (already in meters (m))",
-    },
-    "SNOW_GSP": {
-        "dwd_name": "SNOW_GSP",
-        "description": (
-            "stratiform snow "
-            "(grid-scale precipitation accumulated over the hour)"
-        ),
-        "unit_raw": "kg/m^2",
-        "unit_target": "kg/m^2",
-        "conversion": (
-            "none (already in kg per square meter (kg/m^2))"
-        ),
-    },
-    "SNOW_CON": {
-        "dwd_name": "SNOW_CON",
-        "description": (
-            "convective snow "
-            "(convective precipitation accumulated over the hour)"
-        ),
-        "unit_raw": "kg/m^2",
-        "unit_target": "kg/m^2",
-        "conversion": (
-            "none (already in kg per square meter (kg/m^2))"
-        ),
-    },
+    }
 }

@@ -35,6 +35,16 @@ ATTRIBUTES: dict[str, dict[str, str]] = {
             "(converts Kelvin (K) to Celsius (C))"
         ),
     },
+    "2m_dewpoint_temperature": {
+        "e5l_name": "d2m",
+        "description": "2-meter dew point temperature",
+        "unit_raw": "K",
+        "unit_target": "degC",
+        "conversion": (
+            "subtract 273.15 "
+            "(converts Kelvin (K) to Celsius (C))"
+        ),
+    },
     "10m_u_component_of_wind": {
         "e5l_name": "u10",
         "description": (

@@ -1,5 +1,17 @@
 # Weather
 
+## Pipeline design intention
+
+This pipeline is designed for server runs and not individual computer.
+It produces either raw or processed data which can be used for
+modules related to estimating renewable energy potentials, solar
+gains in buildings, and demands of multiple energy-related sectors.
+Currently, this pipeline standardizes three weather databases:
+
+- `COSMO-REA6`
+- `MERRA2`
+- `ERA5-LAND`
+
 <!-- markdownlint-disable MD013 -->
 [![CI](https://github.com/UU-BUEM/weather/actions/workflows/ci.yml/badge.svg)](https://github.com/UU-BUEM/weather/actions/workflows/ci.yml)
 [![Release](https://github.com/UU-BUEM/weather/actions/workflows/release.yml/badge.svg)](https://github.com/UU-BUEM/weather/actions/workflows/release.yml)
@@ -14,7 +26,7 @@ separate infrastructure folders for environment and container assets.
 
 ```text
 weather/
-├── src/
+├── src/                           # Python package (src-layout standard)
 │   └── weather/
 │       ├── common/
 │       │   ├── __init__.py
@@ -163,6 +175,8 @@ For executing this, the following test files need to be executed.
 ```bash
 python ./src/weather/tests/test_one_year.py
 ```
+
+with the following flags:
 
 ```text
   --year (default: 2018)

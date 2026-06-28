@@ -17,9 +17,6 @@ conda-bld/
 .conda_history
 .conda/
 
-# Documentation
-docs/
-
 # Local runtime data and generated artifacts
 data/
 *.sif
@@ -83,3 +80,4 @@ uu-buem*.md
 
 # Unnecessary files
 src/weather/providers/main.py
+.github/skills/weather-runtime-error-debug/SKILL.md

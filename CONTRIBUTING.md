@@ -9,7 +9,7 @@ Thank you for your interest in contributing to the **weather** pipeline!
 ### Prerequisites
 
 - [Miniconda](https://docs.conda.io/en/latest/miniconda.html) or Miniforge
-- Python 3.14+
+- Python 3.12+
 - Git
 
 ### Quick Setup (Windows)
@@ -214,7 +214,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 feat: add ERA5-Land download step
 fix: correct COSMO bz2 decompression path on Snellius
 docs: update provider README section
-chore: bump Python 3.14 in weather_env.yml
+chore: bump Python 3.12 in weather_env.yml
 ```
 
 ---
