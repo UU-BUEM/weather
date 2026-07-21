@@ -58,9 +58,7 @@ logger = logging.getLogger(__name__)
 try:
     from numba import njit, prange  # type: ignore[import]
     NUMBA_AVAILABLE: bool = True
-except Exception:
-    njit = None        # type: ignore[assignment]
-    prange = range     # type: ignore[assignment]
+except Exception:  # noqa: BLE001
     NUMBA_AVAILABLE = False
 
 

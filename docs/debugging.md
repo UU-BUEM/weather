@@ -110,7 +110,7 @@ export HDF5_USE_FILE_LOCKING=FALSE
 
 This is already set automatically in:
 
-- `test_one_year.py` (`os.environ.setdefault(...)` at module level)
+- `test_cosmo_one_year.py` (`os.environ.setdefault(...)` at module level)
 - `test_percentile.py` (same)
 - `infrastructure/container/Dockerfile` (`ENV HDF5_USE_FILE_LOCKING=FALSE`)
 
@@ -156,7 +156,7 @@ has rate limiting or firewall rules blocking outbound HTTPS to DWD.
 
 ```bash
 # Re-run with --skip-decompress --resume to retry only failed downloads:
-python src/weather/tests/test_one_year.py \
+python src/weather/tests/test_cosmo_one_year.py \
     --year 2018 --ncores 94 --resume
 ```
 
@@ -171,7 +171,7 @@ corrupt file, so re-running is always safe.
 
 ```bash
 find /data/download -name "*.grb.bz2" -size 0 -delete
-python src/weather/tests/test_one_year.py --year 2018 --ncores 94 --resume
+python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 94 --resume
 ```
 
 ---
@@ -198,7 +198,7 @@ checksum mismatch).
 # Delete the bad bz2 and grb files, then re-run:
 rm /data/download/T_2M/T_2M.2D.201801.grb.bz2
 rm /data/decompress/T_2M/T_2M.2D.201801.grb
-python src/weather/tests/test_one_year.py --year 2018 --ncores 94 --resume
+python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 94 --resume
 ```
 
 ---
@@ -216,7 +216,7 @@ jobs, the OOM killer terminates the process.
 1. Reduce `--ncores`:
 
    ```bash
-   python src/weather/tests/test_one_year.py --year 2018 --ncores 48
+   python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 48
    ```
 
 2. Add a SLURM memory limit that reserves enough headroom:
@@ -241,7 +241,7 @@ is reached.
 **Fix:** Use `--resume` to continue from where the job stopped:
 
 ```bash
-python src/weather/tests/test_multi_year.py \
+python src/weather/tests/test_cosmo_multi_year.py \
     --from-year 1995 --to-year 2027 \
     --ncores 94 --resume
 ```

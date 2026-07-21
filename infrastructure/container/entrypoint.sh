@@ -8,8 +8,8 @@
 #
 # PIPELINE_MODE values
 # ─────────────────────
-#   single-year   Run test_one_year.py for COSMO_YEAR
-#   multi-year    Run test_multi_year.py for COSMO_FROM_YEAR … COSMO_TO_YEAR
+#   single-year   Run test_cosmo_one_year.py for COSMO_YEAR
+#   multi-year    Run test_cosmo_multi_year.py for COSMO_FROM_YEAR … COSMO_TO_YEAR
 #   merge         Merge monthly NCs → annual NC for COSMO_YEAR (post-processing)
 #   percentile    Run test_percentile.py (needs annual NCs from multi-year)
 #   check         Validate imports + run unit tests — no data required
@@ -50,7 +50,7 @@ case "${PIPELINE_MODE:-}" in
 
   # ── Single-year COSMO-REA6 pipeline ────────────────────────────────────
   single-year)
-    exec python "${SCRIPTS}/test_one_year.py" \
+    exec python "${SCRIPTS}/test_cosmo_one_year.py" \
         --year   "${COSMO_YEAR:-2018}" \
         --ncores "${COSMO_NCORES:-4}" \
         $(_common_flags)
@@ -58,7 +58,7 @@ case "${PIPELINE_MODE:-}" in
 
   # ── Multi-year COSMO-REA6 pipeline ─────────────────────────────────────
   multi-year)
-    exec python "${SCRIPTS}/test_multi_year.py" \
+    exec python "${SCRIPTS}/test_cosmo_multi_year.py" \
         --from-year      "${COSMO_FROM_YEAR:-1995}" \
         --to-year        "${COSMO_TO_YEAR:-2018}" \
         --ncores         "${COSMO_NCORES:-4}" \

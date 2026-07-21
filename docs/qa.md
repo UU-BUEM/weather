@@ -131,7 +131,7 @@ array in a single vectorised NumPy/Dask pass.
 That would indicate a data quality issue in DWD's COSMO-REA6 source files
 for `SWDIRS_RAD` or `SWDIFDS_RAD` — not a code bug.  The night mask would
 suppress it, but it warrants investigation of that year's source files.
-The `_report_dni_outliers()` function in `test_one_year.py` logs any cell
+The `_report_dni_outliers()` function in `test_cosmo_one_year.py` logs any cell
 where DNI > 1400 W/m² (above the solar constant), which would catch the
 most severe artefacts.
 
@@ -160,13 +160,13 @@ duplicate of `transform.py`.
 
 ---
 
-## 4. Why is the merge step separate from `test_one_year.py`?
+## 4. Why is the merge step separate from `test_cosmo_one_year.py`?
 
 Annual merge (12 monthly NCs → 1 annual NC) takes ~10–30 minutes per year
 and is only needed as input for `test_percentile.py`.  Keeping it separate
 means:
 
-- `test_multi_year.py` can finish in ~30 min/year and free disk space
+- `test_cosmo_multi_year.py` can finish in ~30 min/year and free disk space
   incrementally.
 - You can re-run merge independently if a single month is regenerated.
 - Parallel-year runs are unaffected (each year manages its own monthly files
@@ -194,7 +194,7 @@ done
 
 | File | Description |
 | --- | --- |
-| `COSMO_REA6_<YYYY>_<MM>_all_attrs.nc` | Monthly output from `test_one_year.py` |
+| `COSMO_REA6_<YYYY>_<MM>_all_attrs.nc` | Monthly output from `test_cosmo_one_year.py` |
 | `COSMO_REA6_<YYYY>_annual_all_attrs.nc` | Annual merged file from `weather.common.merge` |
 | `COSMO_REA6_p10_representative.nc` | P10 representative year from `test_percentile.py` |
 | `COSMO_REA6_p50_representative.nc` | P50 (median) representative year |
@@ -224,11 +224,11 @@ Yes.  All entry-point scripts support `--from-year` / `--to-year`:
 
 ```bash
 # Process only 2010–2015
-python src/weather/tests/test_multi_year.py \
+python src/weather/tests/test_cosmo_multi_year.py \
     --from-year 2010 --to-year 2015 --ncores 94
 
 # Single year
-python src/weather/tests/test_one_year.py --year 2005 --ncores 94
+python src/weather/tests/test_cosmo_one_year.py --year 2005 --ncores 94
 ```
 
 For `test_percentile.py` the same flags apply, but note that percentile
@@ -241,7 +241,7 @@ accuracy degrades with fewer years.  A minimum of ~10 years is recommended.
 Use `--resume` to restart without reprocessing completed months:
 
 ```bash
-python src/weather/tests/test_one_year.py \
+python src/weather/tests/test_cosmo_one_year.py \
     --year 2018 --ncores 94 \
     --skip-download --skip-decompress --resume
 ```
@@ -281,7 +281,7 @@ merge to recover ~108 GB.
 After running:
 
 ```bash
-python src/weather/tests/test_one_year.py \
+python src/weather/tests/test_cosmo_one_year.py \
     --year 2005 --months 2 \
     --skip-download --skip-decompress --ncores 94
 ```

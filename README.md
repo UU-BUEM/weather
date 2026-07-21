@@ -66,9 +66,9 @@ weather/
 |       |       └──downloader.py
 |       ├── tests/
 |       |   ├── test_derived_attributes.py
-|       |   ├── test_multi_year.py
-|       |   ├── test_one_month.py
-|       |   ├── test_one_year.py
+|       |   ├── test_cosmo_multi_year.py
+|       |   ├── test_cosmo_one_month.py
+|       |   ├── test_cosmo_one_year.py
 |       |   ├── test_percentile_poe.py
 |       |   ├── test_percentile.py
 |       |   ├── test_pipeline_integration.py
@@ -173,7 +173,7 @@ The pipeline for single year and multi-year is also ready now.
 For executing this, the following test files need to be executed.
 
 ```bash
-python ./src/weather/tests/test_one_year.py
+python ./src/weather/tests/test_cosmo_one_year.py
 ```
 
 with the following flags:
@@ -188,7 +188,7 @@ with the following flags:
 and
 
 ```bash
-python ./src/weather/tests/test_multi_year.py
+python ./src/weather/tests/test_cosmo_multi_year.py
 ```
 
 with the following flags:

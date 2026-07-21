@@ -11,7 +11,7 @@ a `test_*.py` file is something `pytest` will exercise.
 | Category | Files | Run via |
 | --- | --- | --- |
 | pytest unit tests | `test_validation.py`, `test_derived_attributes.py`, `test_pipeline_integration.py` | `pytest` |
-| COSMO-REA6 pipeline runners | `test_one_month.py`, `test_one_year.py`, `test_multi_year.py` | `python <file>.py --help` |
+| COSMO-REA6 pipeline runners | `test_cosmo_one_month.py`, `test_cosmo_one_year.py`, `test_cosmo_multi_year.py` | `python <file>.py --help` |
 | ERA5-Land pipeline runners | `test_era5_one_month.py`, `test_era5_one_year.py`, `test_era5_multi_year.py` | same |
 | ERA5-Land boundary tools | `repair_month_boundaries.py`, `verify_months.py` | same |
 | ERA5-Land diagnostic scripts (historical) | `check_boundary_steps.py`, `check_first_hour.py`, `diagnose_nc.py`, `enumerate_month.py`, `inspect_era5_eccodes.py`, `inspect_era5_grib.py` | same |
@@ -50,23 +50,23 @@ pytest src/weather/tests/test_validation.py \
 Execution order for a complete dataset:
 
 ```text
-1. test_one_month.py   ← sanity check: single month, single year
-2. test_one_year.py    ← single year: 12 monthly NCs
-3. test_multi_year.py  ← all years: threads test_one_year.py per year
+1. test_cosmo_one_month.py   ← sanity check: single month, single year
+2. test_cosmo_one_year.py    ← single year: 12 monthly NCs
+3. test_cosmo_multi_year.py  ← all years: threads test_cosmo_one_year.py per year
         (merge step, outside tests/: python -m weather.common.merge, per year)
 4. providers/cosmo_rea6/percentile_index.py  ← P10/P50/P90 representative years
 ```
 
 | File | Purpose |
 | --- | --- |
-| `test_one_month.py` | Download + decompress + transform 1 month of all 5 attributes |
-| `test_one_year.py` | Full-year pipeline; produces 12 monthly NCs |
-| `test_multi_year.py` | Delegates to `test_one_year.py` per year, optionally via `ThreadPoolExecutor` |
+| `test_cosmo_one_month.py` | Download + decompress + transform 1 month of all 5 attributes |
+| `test_cosmo_one_year.py` | Full-year pipeline; produces 12 monthly NCs |
+| `test_cosmo_multi_year.py` | Delegates to `test_cosmo_one_year.py` per year, optionally via `ThreadPoolExecutor` |
 
 ```bash
-python src/weather/tests/test_one_month.py --year 2018 --month 6 --ncores 8
-python src/weather/tests/test_one_year.py --year 2018 --ncores 94
-python src/weather/tests/test_multi_year.py --from-year 1995 --to-year 2018 --ncores 94
+python src/weather/tests/test_cosmo_one_month.py --year 2018 --month 6 --ncores 8
+python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 94
+python src/weather/tests/test_cosmo_multi_year.py --from-year 1995 --to-year 2018 --ncores 94
 ```
 
 Common flags: `--work-dir DIR` · `--ncores N` · `--skip-download` ·

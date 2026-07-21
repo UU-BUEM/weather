@@ -1,7 +1,7 @@
 # COSMO-REA6 Pipeline Parallelization and Performance
 
 This document describes the parallelization strategy used by both the
-monthly (`test_one_month.py`) and annual (`test_one_year.py`) pipeline
+monthly (`test_cosmo_one_month.py`) and annual (`test_cosmo_one_year.py`) pipeline
 scripts for processing COSMO-REA6 data on a multi-core HPC node.
 
 For the DNI-specific vectorization over the spatial grid using the Spencer
@@ -72,7 +72,7 @@ simultaneously at no cost to either.
 
 ## 2. Download + Decompress: producer-consumer pattern (monthly script)
 
-The monthly script (`test_one_month.py`) uses a **producer-consumer** pattern
+The monthly script (`test_cosmo_one_month.py`) uses a **producer-consumer** pattern
 that overlaps downloading and decompression so the process pool is never idle:
 
 ```python
@@ -100,7 +100,7 @@ are capped at `n` so the split only matters when `ncores < 2 * n_attrs`.
 
 ## 3. Annual pipeline: bulk parallel phases
 
-The annual script (`test_one_year.py`) exploits a key fact: **all
+The annual script (`test_cosmo_one_year.py`) exploits a key fact: **all
 12 months × 9 attributes = 108 download tasks are completely independent**,
 and so are all 108 decompress tasks. The script therefore processes them in
 two bulk phases before any transform work begins.
@@ -201,7 +201,7 @@ months 1–4 have `.nc` files, months 5–12 still have `.grb` files on disk,
 but all `.grb.bz2` were already cleaned up after Phase 2):
 
 ```bash
-python src/weather/tests/test_one_year.py --year 2018 --ncores 94 \
+python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 94 \
     --skip-download --skip-decompress --resume
 ```
 
@@ -329,7 +329,7 @@ encoding[var] = {"zlib": True, "complevel": 1, "dtype": "float32"}
 | --- | --- |
 | `complevel=1` (fastest) | Levels 2–9 give diminishing file-size reduction (< 5%) for 10× more CPU time on large grids |
 | `dtype=float32` | Halves output file size vs float64; instruments have ≈ 0.1 W/m² precision — float32 (7 significant digits) is more than adequate |
-| `HDF5_USE_FILE_LOCKING=FALSE` | Prevents deadlocks on GPFS/Lustre network file systems used on HPC; set at module level in `test_one_year.py` and `export.py` |
+| `HDF5_USE_FILE_LOCKING=FALSE` | Prevents deadlocks on GPFS/Lustre network file systems used on HPC; set at module level in `test_cosmo_one_year.py` and `export.py` |
 
 Dask triggers `.compute()` during `to_netcdf()`, writing chunks concurrently
 with the same 80-thread scheduler used for transform.
@@ -382,7 +382,7 @@ available) is safe.
 
 ## 7. Monthly vs annual comparison
 
-| Feature | `test_one_month.py` | `test_one_year.py` |
+| Feature | `test_cosmo_one_month.py` | `test_cosmo_one_year.py` |
 | --- | --- | --- |
 | Download+decompress | Producer-consumer (9+9 workers) | Bulk parallel: min(108, ncores) |
 | Inline download check | `size > 0` per future | `size > 0` per future |
@@ -502,7 +502,7 @@ COSMO_WORK_DIR=/data/soma/cosmo_rea6
 # SLURM_CPUS_PER_TASK is read automatically but --ncores overrides it
 
 # Run  (explicit --ncores recommended on shared nodes)
-python src/weather/tests/test_one_year.py --year 2018 --ncores 94 --resume
+python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 94 --resume
 ```
 
 ### Choosing `--ncores`
@@ -529,7 +529,7 @@ worker uses (default: 4). This interacts critically with `COSMO_NCORES`:
 | `lbzip2` / `pbzip2` | 4 (default) | `94 × 4 = 376` | **Oversubscribed** — 376 threads / 94 cores |
 | `lbzip2` / `pbzip2` | **1** | `94 × 1 = 94` | **Correct** — one thread per core; max throughput |
 
-**Rule**: when running `test_one_year.py` with bulk parallel decompression
+**Rule**: when running `test_cosmo_one_year.py` with bulk parallel decompression
 (`ProcessPoolExecutor`, `ncores` workers), always set:
 
 ```bash
@@ -550,6 +550,6 @@ process-level parallelism already saturates all cores.
 | Topic | File |
 | --- | --- |
 | DNI formula and Spencer vectorization | [dni_methodology.md](dni_methodology.md) |
-| Monthly pipeline script | `src/weather/tests/test_one_month.py` |
-| Annual pipeline script | `src/weather/tests/test_one_year.py` |
+| Monthly pipeline script | `src/weather/tests/test_cosmo_one_month.py` |
+| Annual pipeline script | `src/weather/tests/test_cosmo_one_year.py` |
 | Environment configuration | `.env.example` |

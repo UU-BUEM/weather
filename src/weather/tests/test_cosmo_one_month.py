@@ -22,15 +22,15 @@ Usage
 -----
 Basic::
 
-    python src/weather/tests/test_one_month.py
+    python src/weather/tests/test_cosmo_one_month.py
 
 Custom year/month::
 
-    python src/weather/tests/test_one_month.py --year 2018 --month 6
+    python src/weather/tests/test_cosmo_one_month.py --year 2018 --month 6
 
 Full set of options::
 
-    python src/weather/tests/test_one_month.py \\
+    python src/weather/tests/test_cosmo_one_month.py \\
         --year 2018 --month 1 \\
         --work-dir /scratch/cosmo_test \\
         --ncores 8 \\
@@ -38,8 +38,8 @@ Full set of options::
 
 Re-use already-downloaded files::
 
-    python src/weather/tests/test_one_month.py --skip-download
-    python src/weather/tests/test_one_month.py --skip-download
+    python src/weather/tests/test_cosmo_one_month.py --skip-download
+    python src/weather/tests/test_cosmo_one_month.py --skip-download
     --skip-decompress
 
 Flags
@@ -56,7 +56,7 @@ Pipeline flow
 -------------
 ::
 
-    test_one_month.py
+    test_cosmo_one_month.py
       │
       ├── Phase 1 — Download (ThreadPoolExecutor, 9 × 1 = 9 parallel tasks)
       │     For each of the 9 COSMO-REA6 attributes:

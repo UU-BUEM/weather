@@ -131,8 +131,8 @@ weather/
     └── tests/                      # runners + tools + pytest units
         ├── (pytest) test_validation, test_derived_attributes,
         │            test_pipeline_integration
-        ├── (COSMO)  test_one_month, test_one_year, test_multi_year,
-        │            test_percentile
+        ├── (COSMO)  test_cosmo_one_month, test_cosmo_one_year,
+        │            test_cosmo_multi_year
         ├── (ERA5)   test_era5_one_month, test_era5_one_year,
         │            test_era5_multi_year
         ├── (ERA5 tools) repair_month_boundaries, verify_months,

@@ -5,10 +5,10 @@ Flow
 ----
 ::
 
-    test_multi_year.py
+    test_cosmo_multi_year.py
       ├─ ThreadPoolExecutor(max_workers=parallel_years)
       │    └─ For each year in [from_year … to_year]:
-      │         subprocess: python test_one_year.py --year YEAR
+      │         subprocess: python test_cosmo_one_year.py --year YEAR
       │           --ncores (ncores // parallel_years) [flags]
       │              └─ Phase 1 — Download   (ThreadPoolExecutor)
       │              └─ Phase 2 — Decompress (ProcessPoolExecutor)
@@ -51,18 +51,18 @@ Usage
 -----
 Basic (all 24 years, sequential)::
 
-    python src/weather/tests/test_multi_year.py \\
+    python src/weather/tests/test_cosmo_multi_year.py \\
         --from-year 1995 --to-year 2018 --ncores 94
 
 Parallel (4 years at once)::
 
-    python src/weather/tests/test_multi_year.py \\
+    python src/weather/tests/test_cosmo_multi_year.py \\
         --from-year 1995 --to-year 2018 \\
         --ncores 96 --parallel-years 4
 
 Resume interrupted run::
 
-    python src/weather/tests/test_multi_year.py \\
+    python src/weather/tests/test_cosmo_multi_year.py \\
         --from-year 1995 --to-year 2018 --ncores 94 --resume
 
 Flags
@@ -94,7 +94,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 _here = Path(__file__).resolve().parent   # src/weather/tests/
 _src = _here.parent.parent               # src/
-_TEST_ONE_YEAR = _here / "test_one_year.py"
+_TEST_ONE_YEAR = _here / "test_cosmo_one_year.py"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -121,7 +121,7 @@ def run_year(
     ncores_per_year: int,
     args: argparse.Namespace,
 ) -> tuple[int, bool, str]:
-    """Run ``test_one_year.py`` for *year* in a child process.
+    """Run ``test_cosmo_one_year.py`` for *year* in a child process.
 
     Parameters
     ----------
@@ -171,7 +171,7 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=(
             "Multi-year COSMO-REA6 pipeline — processes every year in "
-            "[from_year, to_year] by delegating to test_one_year.py."
+            "[from_year, to_year] by delegating to test_cosmo_one_year.py."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -206,7 +206,7 @@ def _parse_args() -> argparse.Namespace:
         "--resume", action="store_true",
         help=(
             "Skip years where all 12 monthly NCs already exist. "
-            "Also forwarded to test_one_year.py (skips individual months)."
+            "Also forwarded to test_cosmo_one_year.py (skips individual months)."
         ),
     )
     p.add_argument(

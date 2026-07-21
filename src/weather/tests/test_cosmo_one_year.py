@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Full-year COSMO-REA6 pipeline: all 12 months, all 9 attributes.
 
-test_one_year.py
+test_cosmo_one_year.py
   └─ _decompress_all()
        └─ cosmo_rea6/decompress.py :: decompress_file()
             └─ common/decompress.py :: decompress_bz2_file()
@@ -47,20 +47,20 @@ Usage
 -----
 Basic (year 2018, 80 cores)::
 
-    python src/weather/tests/test_one_year.py --year 2018 --ncores 80
+    python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 80
 
 Resume an interrupted run (skips months whose output NC exists)::
 
-    python src/weather/tests/test_one_year.py --year 2018 --ncores 80 \\
+    python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 80 \\
         --resume
 
 Process only specific months (e.g. re-run a failed month)::
 
-    python src/weather/tests/test_one_year.py --year 2018 --months 7,8
+    python src/weather/tests/test_cosmo_one_year.py --year 2018 --months 7,8
 
 Full set of options::
 
-    python src/weather/tests/test_one_year.py \\
+    python src/weather/tests/test_cosmo_one_year.py \\
         --year 2018 --ncores 80 \\
         --work-dir /data/soma/cosmo_rea6 \\
         --resume

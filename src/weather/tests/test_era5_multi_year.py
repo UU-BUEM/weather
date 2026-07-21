@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Multi-year ERA5-Land pipeline: every year in a range.
 
-Mirrors the COSMO-REA6 ``test_multi_year.py`` flag structure and
+Mirrors the COSMO-REA6 ``test_cosmo_multi_year.py`` flag structure and
 delegates each year to ``test_era5_one_year.py`` in a child process.
 
 Flow
