@@ -31,12 +31,15 @@ export COSMO_SRC_DIR="${COSMO_SRC_DIR:-${COSMO_REPO_DIR}/src}"
 export COSMO_SCRIPTS_DIR="${COSMO_SCRIPTS_DIR:-${COSMO_REPO_DIR}/scripts}"
 
 # ── Load .env if present ──────────────────────────────────────────────────
+# Stripped through `tr -d '\r'` so a CRLF-saved .env (e.g. edited on
+# Windows, then copied to the server) doesn't break `source` with
+# "$'\r': command not found" on every line.
 for _candidate in "${COSMO_REPO_DIR}/.env" \
                   "${HOME}/.env"; do
     if [ -f "$_candidate" ]; then
         echo "[common] Loading .env from $_candidate"
         set -a
-        source "$_candidate"
+        source <(tr -d '\r' < "$_candidate")
         set +a
         break
     fi

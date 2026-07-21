@@ -1,4 +1,4 @@
-﻿"""MERRA-2 pipeline configuration.
+"""MERRA-2 pipeline configuration.
 
 All settings are resolved through
 :class:`~weather.settings.EnvSettings`.
@@ -26,7 +26,8 @@ def get_config() -> dict[str, Any]:
     dict[str, Any]
         Keys: ``work_dir``, ``download_dir``, ``processed_dir``,
         ``output_dir``, ``year``, ``attributes``, ``ncores``,
-        ``threads_per_job``, ``conda_env``.
+        ``threads_per_job``, ``conda_env``, ``area``,
+        ``opendap_max_concurrent``.
     """
     return {
         "work_dir": EnvSettings.merra2_work_dir(),
@@ -38,4 +39,10 @@ def get_config() -> dict[str, Any]:
         "ncores": EnvSettings.merra2_ncores(),
         "threads_per_job": EnvSettings.merra2_threads_per_job(),
         "conda_env": EnvSettings.merra2_conda_env(),
+        # Geographic crop [N, W, S, E]; Europe by default (see
+        # EnvSettings.merra2_area).
+        "area": EnvSettings.merra2_area(),
+        # GES DISC OPeNDAP has no CDS-style per-account job queue, so
+        # this can be higher than ERA5's cds_max_concurrent=1.
+        "opendap_max_concurrent": EnvSettings.merra2_opendap_max_concurrent(),
     }

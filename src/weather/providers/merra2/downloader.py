@@ -1,146 +1,281 @@
-"""MERRA-2 concrete downloader (stub — requires NASA Earthdata auth).
+"""MERRA-2 concrete downloader via NASA GES DISC OPeNDAP.
 
-Implements :class:`~weather.providers.base_downloader.BaseDownloader`
-for the NASA GES DISC MERRA-2 archive.
+Implements :class:`~weather.providers.base_downloader.BaseDownloader` for
+the NASA GES DISC MERRA-2 archive, using **OPeNDAP** server-side
+subsetting rather than full-file HTTPS download — only the configured
+Europe bounding box is ever transferred, never a global daily file.
 
-Authentication requirements
----------------------------
-MERRA-2 data is distributed via the NASA GES DISC OPeNDAP/HTTPS
-server.  Access requires a **free** NASA Earthdata account:
+Authentication
+--------------
+Requires a free NASA Earthdata account:
 
 1. Register at https://urs.earthdata.nasa.gov/
-2. In *Applications > Authorized Apps*, add
-   **"NASA GESDISC DATA ARCHIVE"** to your approved list.
-3. Create or update ``~/.netrc``::
+2. In *Applications > Authorized Apps*, add **"NASA GESDISC DATA
+   ARCHIVE"** to your approved list.
+3. Either set ``EARTHDATA_USERNAME``/``EARTHDATA_PASSWORD`` in ``.env``,
+   or create ``~/.netrc``::
 
        machine urs.earthdata.nasa.gov
            login  <your_username>
            password <your_password>
 
-4. Set permissions: ``chmod 600 ~/.netrc``
+   (see :func:`weather.common.net.earthdata_auth`).
 
-Python's :mod:`urllib.request` reads ``~/.netrc`` automatically, so
-no credentials appear in code.  Alternatively, set the environment
-variables ``EARTHDATA_USER`` and ``EARTHDATA_PASS`` and pass them to
-:func:`~weather.common.download.download_https_atomic`.
+NASA's login flow redirects across hosts (``urs.earthdata.nasa.gov`` <->
+the GES DISC data host), and ``requests`` strips the ``Authorization``
+header on such cross-host redirects by default — so a plain session
+would silently fail auth partway through.  :func:`_session` uses
+:func:`weather.common.net.build_session`'s ``preserve_auth_hosts`` to
+keep the header attached across that specific redirect chain.
 
-Download granularity
---------------------
-Unlike COSMO-REA6 (one file per attribute per month), MERRA-2 files
-are **one NetCDF4 file per day** in collections such as
-``M2T1NXRAD.5.12.4`` (hourly radiation) or ``M2T1NXSLV.5.12.4``
-(hourly surface variables).
-
-Collection reference:
-  https://disc.gsfc.nasa.gov/datasets?project=MERRA-2
-
-A full MERRA-2 downloader therefore needs a ``Merra2DownloadJob``
-dataclass with a ``date`` field (or ``year``/``month``/``day``), and
-the ``remote_size`` implementation must query the GES DISC OPeNDAP
-file catalog for each collection/date combination.
-
-Status
-------
-This module provides the ``Merra2Downloader`` class skeleton.
-Implement the three abstract methods to complete it.
+Download model
+---------------
+* **All-attributes-per-collection-per-day**: one OPeNDAP request fetches
+  every configured attribute of one collection (``rad`` or ``slv``) for
+  one calendar day, cropped to :func:`~weather.providers.merra2.config`'s
+  ``area`` (Europe by default).  MERRA-2 files are per-DAY (unlike
+  COSMO's per-month), so :class:`Merra2DownloadJob` carries a ``day``
+  field — see :mod:`weather.providers.base_downloader`'s own docstring,
+  which names MERRA-2 as the example provider needing this.
+* **No queue**: unlike CDS, GES DISC's OPeNDAP server has no
+  per-account job queue, so ``remote_size`` and retries are plain
+  HTTP semantics (see :data:`weather.settings.EnvSettings.merra2_opendap_max_concurrent`).
 """
 
 from __future__ import annotations
 
 import logging
+import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
-from ..base_downloader import BaseDownloader, DownloadJob
+from ...common.net import build_session, earthdata_auth, exponential_backoff
+from ..base_downloader import BaseDownloader
+from .downloaded_attributes import ATTRIBUTES, COLLECTIONS, attrs_by_collection
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# GES DISC collection URLs (adjust for the target MERRA-2 product)
-# ---------------------------------------------------------------------------
-#: Hourly radiation flux collection (shortwave, longwave, cloud forcing).
-_GES_DISC_RAD = (
-    "https://goldsmr4.gesdisc.eosdis.nasa.gov/data"
-    "/MERRA2/M2T1NXRAD.5.12.4"
+#: OPeNDAP host serving MERRA-2 collections.
+_GES_DISC_HOST = "goldsmr4.gesdisc.eosdis.nasa.gov"
+_OPENDAP_BASE = f"https://{_GES_DISC_HOST}/opendap/MERRA2"
+
+#: Hosts that must keep Authorization across NASA's login redirect chain.
+_TRUSTED_AUTH_HOSTS = frozenset({
+    "urs.earthdata.nasa.gov",
+    _GES_DISC_HOST,
+})
+
+#: GES DISC file "product" token per collection (fixed by NASA's naming).
+_PRODUCT_TOKEN = {
+    "rad": "tavg1_2d_rad_Nx",
+    "slv": "tavg1_2d_slv_Nx",
+}
+
+#: MERRA-2 "stream" number prefix by date range (fixed by NASA's naming;
+#: see https://disc.gsfc.nasa.gov/information/glossary?title=MERRA-2%20File%20Naming%20Conventions).
+_STREAM_RANGES: tuple[tuple[int, int, int], ...] = (
+    (1980, 1991, 100),
+    (1992, 2000, 200),
+    (2001, 2010, 300),
+    (2011, 9999, 400),
 )
-#: Hourly single-level diagnostics (temperature, wind, surface pressure).
-_GES_DISC_SLV = (
-    "https://goldsmr4.gesdisc.eosdis.nasa.gov/data"
-    "/MERRA2/M2T1NXSLV.5.12.4"
-)
+
+#: MERRA-2's fixed global grid (0.5 deg lat x 0.625 deg lon, origin at
+#: the South-West corner, -90/-180).
+_LAT_STEP = 0.5
+_LON_STEP = 0.625
+_LAT_MIN, _LAT_MAX = -90.0, 90.0
+_LON_MIN, _LON_MAX = -180.0, 180.0
+
+
+def _stream_prefix(year: int) -> int:
+    """Return the MERRA-2 stream number (100/200/300/400) for *year*."""
+    for lo, hi, stream in _STREAM_RANGES:
+        if lo <= year <= hi:
+            return stream
+    raise ValueError(f"No MERRA-2 stream defined for year {year}")
+
+
+def _bbox_indices(area: list[float]) -> tuple[int, int, int, int]:
+    """Convert a ``[N, W, S, E]`` box to MERRA-2 native grid indices.
+
+    Parameters
+    ----------
+    area : list[float]
+        ``[North, West, South, East]`` in degrees, as returned by
+        :meth:`weather.settings.EnvSettings.merra2_area`.
+
+    Returns
+    -------
+    (lat0, lat1, lon0, lon1) : tuple[int, int, int, int]
+        Inclusive 0-based index ranges into MERRA-2's fixed global grid
+        (361 lat points, 576 lon points), lat ascending south-to-north,
+        lon ascending west-to-east.
+    """
+    north, west, south, east = area
+    lat0 = math.floor((south - _LAT_MIN) / _LAT_STEP)
+    lat1 = math.ceil((north - _LAT_MIN) / _LAT_STEP)
+    lon0 = math.floor((west - _LON_MIN) / _LON_STEP)
+    lon1 = math.ceil((east - _LON_MIN) / _LON_STEP)
+    n_lat = round((_LAT_MAX - _LAT_MIN) / _LAT_STEP)
+    n_lon = round((_LON_MAX - _LON_MIN) / _LON_STEP)
+    lat0, lat1 = max(0, lat0), min(n_lat, lat1)
+    lon0, lon1 = max(0, lon0), min(n_lon, lon1)
+    return lat0, lat1, lon0, lon1
+
+
+@dataclass(frozen=True)
+class Merra2DownloadJob:
+    """Coordinates identifying one MERRA-2 OPeNDAP request.
+
+    Unlike COSMO/ERA5-Land's ``DownloadJob(attribute, year, month)``,
+    MERRA-2 files are per-DAY and one request already covers every
+    attribute of a *collection* (see
+    :func:`~weather.providers.merra2.downloaded_attributes.attrs_by_collection`),
+    so the job is keyed by ``(collection, year, month, day)`` rather than
+    by individual attribute.  Sanctioned by
+    :mod:`weather.providers.base_downloader`'s own docstring, which
+    names MERRA-2 as the provider expected to define its own job type.
+
+    Attributes
+    ----------
+    collection : str
+        Short collection key, ``"rad"`` or ``"slv"``.
+    year, month, day : int
+        Calendar date this request covers.
+    """
+
+    collection: str
+    year: int
+    month: int
+    day: int
+
+    def __str__(self) -> str:
+        return f"{self.collection} {self.year}-{self.month:02d}-{self.day:02d}"
 
 
 class Merra2Downloader(BaseDownloader):
-    """MERRA-2 downloader for NASA GES DISC HTTPS.
+    """MERRA-2 downloader for NASA GES DISC OPeNDAP.
 
     Parameters
     ----------
     config : dict
         Pipeline configuration as returned by
         :func:`~weather.providers.merra2.config.get_config`.
-        Required keys: ``work_dir``, ``download_dir``.
-
-    Notes
-    -----
-    MERRA-2 files are one NetCDF4 per *day*, not per month.
-    Extend ``DownloadJob`` or define a ``Merra2DownloadJob``
-    with a ``day`` field to address individual files.
-
-    The ``remote_size`` method requires a catalog lookup against
-    the GES DISC OpenDAP file listing (e.g.
-    ``https://goldsmr4.gesdisc.eosdis.nasa.gov/opendap/…/catalog.xml``).
+        Required keys: ``download_dir``, ``area``.
     """
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._cfg = config
+        self._session: Any = None
 
     # ------------------------------------------------------------------
-    # BaseDownloader implementation (stubs — complete before use)
+    # Session / URL construction
     # ------------------------------------------------------------------
 
-    def remote_size(self, job: DownloadJob) -> int | None:
-        """Query the GES DISC catalog for the file size.
+    def _get_session(self) -> Any:
+        if self._session is None:
+            self._session = build_session(
+                auth=earthdata_auth(),
+                preserve_auth_hosts=_TRUSTED_AUTH_HOSTS,
+            )
+        return self._session
 
-        .. todo::
-            Implement with a HEAD request to the resolved GES DISC URL.
-            Requires ``~/.netrc`` credentials for
-            ``urs.earthdata.nasa.gov``.
+    def build_url(self, job: Merra2DownloadJob) -> str:
+        """Return the full OPeNDAP constraint URL for *job*.
+
+        Pure string/index math — no network I/O — so it can be
+        unit-tested and inspected without Earthdata credentials.
         """
-        raise NotImplementedError(
-            "Merra2Downloader.remote_size: not yet implemented. "
-            "Implement with a HEAD request to the GES DISC catalog "
-            "using ~/.netrc credentials."
+        collection_id = COLLECTIONS[job.collection]
+        product = _PRODUCT_TOKEN[job.collection]
+        stream = _stream_prefix(job.year)
+        date_str = f"{job.year}{job.month:02d}{job.day:02d}"
+        filename = f"MERRA2_{stream}.{product}.{date_str}.nc4"
+
+        area = self._cfg["area"]
+        lat0, lat1, lon0, lon1 = _bbox_indices(area)
+
+        attrs = attrs_by_collection()[job.collection]
+        var_terms = [
+            f"{ATTRIBUTES[a]['m2_name']}[0:1:23][{lat0}:1:{lat1}][{lon0}:1:{lon1}]"
+            for a in attrs
+        ]
+        coord_terms = [
+            "time",
+            f"lat[{lat0}:1:{lat1}]",
+            f"lon[{lon0}:1:{lon1}]",
+        ]
+        constraint = ",".join(var_terms + coord_terms)
+
+        # NB: the trailing ".nc4" is intentional and NOT a duplicate typo
+        # — GES DISC's OPeNDAP data-access endpoint appends an output-
+        # format suffix on top of the granule's own ".nc4" filename, so
+        # the real URL ends in ".nc4.nc4" (confirmed against NASA's own
+        # published example URLs).
+        base = (
+            f"{_OPENDAP_BASE}/{collection_id}/{job.year}/{job.month:02d}/"
+            f"{filename}.nc4"
         )
+        return f"{base}?{quote(constraint, safe='[],:')}"
 
-    def local_path(self, job: DownloadJob) -> Path:
-        """Return the local destination path.
+    # ------------------------------------------------------------------
+    # BaseDownloader implementation
+    # ------------------------------------------------------------------
 
-        .. todo::
-            Map (attribute, year, month) to the MERRA-2 per-day file
-            naming convention:
-            ``MERRA2_400.<collection>.<YYYYMMDD>.nc4``.
+    # NB: these 3 methods intentionally take Merra2DownloadJob, not the
+    # base DownloadJob (attribute, year, month) — MERRA-2's per-day, per-
+    # collection granularity doesn't fit that shape.  base_downloader.py's
+    # own docstring sanctions this ("providers with a different
+    # granularity ... define their own job type"), so the resulting
+    # mypy Liskov warning is expected and intentionally suppressed below.
+
+    def local_path(  # type: ignore[override]
+        self, job: Merra2DownloadJob,
+    ) -> Path:
+        """Return the local destination path for *job*."""
+        date_str = f"{job.year}{job.month:02d}{job.day:02d}"
+        download_dir = Path(self._cfg["download_dir"])
+        return download_dir / f"MERRA2_{job.collection}_{date_str}.nc4"
+
+    def remote_size(  # type: ignore[override]
+        self, job: Merra2DownloadJob,
+    ) -> int | None:
+        """Always ``None``.
+
+        OPeNDAP subset responses don't reliably report a size before
+        the transfer completes across all THREDDS/Hyrax server
+        configurations, so completeness is existence-based — the same
+        rationale :class:`~weather.providers.era5_land.downloader.Era5Downloader`
+        uses for the CDS queue.
         """
-        raise NotImplementedError(
-            "Merra2Downloader.local_path: not yet implemented. "
-            "MERRA-2 files are per-day, not per-month. "
-            "Define a Merra2DownloadJob with a 'day' field."
-        )
+        return None
 
-    def _fetch(self, job: DownloadJob) -> Path:
-        """Download from GES DISC via authenticated HTTPS.
+    def _fetch(  # type: ignore[override]
+        self, job: Merra2DownloadJob,
+    ) -> Path:
+        """Download *job* via an authenticated, redirect-safe session."""
+        dest = self.local_path(job)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        url = self.build_url(job)
+        session = self._get_session()
 
-        .. todo::
-            Build the GES DISC URL for the requested collection/date,
-            then call :func:`~weather.common.download.download_https_atomic`
-            with netrc-based auth.
+        @exponential_backoff(max_attempts=5, exceptions=(OSError,))
+        def _download() -> Path:
+            tmp = dest.with_suffix(dest.suffix + ".part")
+            logger.info("Fetching %s -> %s", job, dest.name)
+            with session.get(url, stream=True, timeout=(10, 300)) as resp:
+                resp.raise_for_status()
+                with open(tmp, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=1 << 20):
+                        if chunk:
+                            f.write(chunk)
+            if tmp.stat().st_size == 0:
+                tmp.unlink(missing_ok=True)
+                raise OSError(f"Downloaded file is empty: {url}")
+            tmp.replace(dest)
+            return dest
 
-            Example URL pattern::
-
-                https://goldsmr4.gesdisc.eosdis.nasa.gov/data/
-                MERRA2/M2T1NXRAD.5.12.4/2018/01/
-                MERRA2_400.tavg1_2d_rad_Nx.20180101.nc4
-        """
-        raise NotImplementedError(
-            "Merra2Downloader._fetch: not yet implemented. "
-            "Requires NASA Earthdata credentials in ~/.netrc."
-        )
+        return _download()

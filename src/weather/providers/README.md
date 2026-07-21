@@ -22,7 +22,7 @@ abstract base classes that define the shared provider contract.
 | `base.py` | `Protocol` | Minimal typing interface used by the CLI registry (`WeatherProvider`) |
 | `base_downloader.py` | Abstract base class | Template-method download skeleton: `is_complete → skip / _fetch` |
 | `base_decompressor.py` | Abstract base class | Template-method decompress skeleton: skip-if-done logic |
-| `base_percentile.py` | Abstract base class | Template-method P10/P50/P90 representative-year selection (see below) |
+| `base_percentile.py` | Abstract base class | **Dead code** — superseded by the standalone `percentile_index.py` scripts (see below); no provider subclasses it |
 
 ### Adding a new provider
 
@@ -34,32 +34,40 @@ abstract base classes that define the shared provider contract.
 
 ---
 
-## `base_percentile.py` — template-method pattern
+## `base_percentile.py` — dead code, do not use for new providers
+
+An earlier template-method design (`annual_metric`/`load_annual_dataset`/
+`standard_time_hours`, one annual NetCDF per year) lived in
+`cosmo_rea6/percentile.py`. It was **deleted** (commit `17d5eea`, "Added
+percentile and documentation") and replaced by the standalone
+`percentile_index.py` scripts described below, which do not use
+`base_percentile.py` at all. The base class and `common/percentile.py`
+still exist in the tree but are unused — check with the team before
+building a new provider against them.
+
+## `percentile_index.py` — the actual production pattern (COSMO + ERA5-Land)
+
+Each of `cosmo_rea6/percentile_index.py` and `era5_land/percentile_index.py`
+is a self-contained, three-phase script (no shared base class):
 
 ```text
-                 ┌─────────────────────────────────────────┐
-                 │  BasePercentileAnalyzer.run()            │
-                 │  (orchestration — implemented once here) │
-                 └───────────────┬─────────────────────────┘
-                    calls        │        calls
-          ┌──────────────────────┼────────────────────────┐
-          ▼                      ▼                        ▼
-  annual_metric()       load_annual_dataset()    standard_time_hours()
-  (abstract)            (abstract)               (abstract)
-  ← Provider subclass implements these three methods →
+Load (parallel file read)  →  KS distance match per month/cell  →  Mosaic
+(day-summed GHI, leap        (argmin |empirical CDF − pooled       (spawn
+ days dropped)                 P10/P50/P90 threshold|)              workers
+                                                                     write
+                                                                     36 NC
+                                                                     files)
 ```
 
-Each provider subclass must implement:
-
-- `annual_metric(year)` — returns a scalar GHI (or other rank metric) per
-  cell for the given year.
-- `load_annual_dataset(year)` — opens the pre-merged annual NetCDF (lazily).
-- `standard_time_hours()` — returns 8760 (non-leap) or 8784 (leap-year
-  normalisation) for this provider.
-
-All mosaic construction, percentile computation, output file writing, and
-`source_year(rlat, rlon)` variable management are implemented once in the
-base class.
+Both read monthly NetCDF files directly (`*_YYYY_MM_*.nc`), find — per
+grid cell and calendar month — the year whose empirical GHI distribution
+best matches the pooled P10/P50/P90 threshold (Finkelstein-Schafer
+KS-distance), then mosaic every variable from the winning year into
+`{provider}_{p10,p50,p90}_{MM}_all_attrs.nc`, including a `source_year`
+provenance variable. ERA5-Land's version is a structural port of COSMO's,
+differing only in: filename regex, grid size inferred from data (not
+hardcoded), and `n_cpu_cores` default (6, I/O-bound vs COSMO's 94,
+CPU-bound).
 
 ---
 
@@ -78,7 +86,7 @@ base class.
 | `export.py` | `xr.Dataset → NetCDF` with zlib encoding and attribute metadata |
 | `naming.py` | Canonical filename helpers for all output paths |
 | `pipeline.py` | Orchestrates Phases 1 → 2 → 3 for one year; returned by `WeatherProvider.run_pipeline()` |
-| `percentile.py` | `CosmoPercentileAnalyzer` extending `base_percentile.BasePercentileAnalyzer` |
+| `percentile_index.py` | Standalone P10/P50/P90 KS-distance script (see above) |
 
 ### COSMO-REA6 per-year pipeline flow
 

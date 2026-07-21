@@ -329,6 +329,52 @@ def _era5_dni(
     return mask_night(dni, sol_pos["zenith"])
 
 
+def _era5_rh(
+    ds: dict[str, Any],
+    sol_pos: dict[str, Any],
+    times: Any,
+) -> np.ndarray:
+    """Relative humidity (%) via the August-Roche-Magnus approximation.
+
+    Computed from 2 m temperature and 2 m dew point.  Inputs are read
+    in **Kelvin** (ERA5-Land raw ``t2m``/``d2m``) and converted to
+    Celsius internally::
+
+        RH = 100 * exp( a*Td/(b+Td) - a*T/(b+T) )
+
+    with ``a = 17.625``, ``b = 243.04`` and T, Td in degC.  Result is
+    clipped to [0, 100].
+
+    .. note::
+       The gridded pipeline computes RH inside
+       ``providers.era5_land.transform`` (from raw Kelvin, before unit
+       conversion).  This registry entry mirrors that formula so the
+       manifest is complete and self-describing; pass raw-Kelvin
+       ``t2m``/``d2m`` if calling it directly.
+    """
+    t2m = np.asarray(ds["t2m"], dtype=float)
+    d2m = np.asarray(ds["d2m"], dtype=float)
+    t = t2m - 273.15
+    td = d2m - 273.15
+    a, b = 17.625, 243.04
+    rh = 100.0 * np.exp((a * td) / (b + td) - (a * t) / (b + t))
+    return np.clip(rh, 0.0, 100.0)
+
+
+def _era5_wind_speed(
+    ds: dict[str, Any],
+    sol_pos: dict[str, Any],
+    times: Any,
+) -> np.ndarray:
+    """Scalar 10 m wind speed ``WS_10M = sqrt(u10**2 + v10**2)`` (m/s).
+
+    Magnitude is frame-invariant, so no vector rotation is needed.
+    """
+    u = np.asarray(ds["u10"], dtype=float)
+    v = np.asarray(ds["v10"], dtype=float)
+    return np.sqrt(u ** 2 + v ** 2)
+
+
 # ---------------------------------------------------------------------------
 # DERIVED_FIELDS registry
 # ---------------------------------------------------------------------------
@@ -387,29 +433,35 @@ DERIVED_FIELDS: dict[str, dict[str, dict[str, Any]]] = {
             "formula": _merra2_dni,
         },
     },
+    # ERA5-Land supplies only total shortwave (ssrd), so only GHI is a
+    # *gridded* derived field.  DNI/DHI require a per-site decomposition
+    # (DIRINT/DISC) whose pvlib implementation is 1-D-in-time and cannot
+    # broadcast over (time, y, x); attempting it on the grid raises.
+    # Those are therefore provided as an opt-in point/region helper in
+    # ``weather.providers.era5_land.dni_pointwise`` rather than here.
     "ERA5_LAND": {
         "GHI": {
             "description": (
-                "Global Horizontal Irradiance = ssrd / 3600"
+                "Global Horizontal Irradiance: ssrd de-accumulated "
+                "per UTC day, divided by 3600 s (hourly-mean flux)"
             ),
             "unit": "W/m2",
             "formula": _era5_ghi,
         },
-        "DHI": {
+        "RH": {
             "description": (
-                "Diffuse Horizontal Irradiance "
-                "via DIRINT pressure-aware decomposition"
+                "Relative Humidity via Magnus formula from 2 m "
+                "temperature and 2 m dew point"
             ),
-            "unit": "W/m2",
-            "formula": _era5_dhi,
+            "unit": "%",
+            "formula": _era5_rh,
         },
-        "DNI": {
+        "WS_10M": {
             "description": (
-                "Direct Normal Irradiance "
-                "via DIRINT pressure-aware decomposition"
+                "Scalar 10 m wind speed from u/v components"
             ),
-            "unit": "W/m2",
-            "formula": _era5_dni,
+            "unit": "m/s",
+            "formula": _era5_wind_speed,
         },
     },
 }

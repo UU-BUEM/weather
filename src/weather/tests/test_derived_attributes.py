@@ -98,6 +98,10 @@ def era5_ds(zenith_degrees) -> dict:
     return {
         "ssrd": ghi_wm2 * 3600.0,  # J/m2 (hourly accumulation)
         "sp": np.full(N, 101_325.0),
+        "t2m": np.full(N, 288.15),  # 15 degC
+        "d2m": np.full(N, 283.15),  # 10 degC
+        "u10": np.full(N, 3.0),
+        "v10": np.full(N, 4.0),
     }
 
 
@@ -250,7 +254,13 @@ class TestMERRA2Derivations:
 # ---------------------------------------------------------------------------
 
 class TestERA5LandDerivations:
-    """Tests for ERA5-Land GHI, DHI, DNI via DIRINT."""
+    """Tests for ERA5-Land GHI, RH, WS_10M.
+
+    DHI/DNI are not registered for ERA5-Land (see
+    ``dni_pointwise.py`` for the opt-in point/region decomposition),
+    so only GHI is night-masked/clipped here; RH and WS_10M are plain
+    meteorological quantities, not irradiance.
+    """
 
     @pytest.fixture(autouse=True)
     def _compute(self, era5_ds, sol_pos, times):
@@ -263,7 +273,7 @@ class TestERA5LandDerivations:
         self.zen = sol_pos["zenith"]
 
     def test_keys_present(self):
-        assert {"GHI", "DHI", "DNI"} <= self.results.keys()
+        assert {"GHI", "RH", "WS_10M"} <= self.results.keys()
 
     def test_no_negative_values(self):
         for name, arr in self.results.items():
@@ -273,22 +283,8 @@ class TestERA5LandDerivations:
 
     def test_night_is_zero(self):
         night = self.zen >= NIGHT_ZENITH_DEG
-        for name, arr in self.results.items():
-            assert np.all(arr[night] == 0.0), (
-                f"ERA5-Land {name}: night values must be 0"
-            )
-
-    def test_energy_balance(self):
-        """GHI ~ DHI + DNI * cos(zenith) within 5 W/m2."""
-        day = self.zen < NIGHT_ZENITH_DEG
-        cos_z = np.cos(np.radians(self.zen[day]))
-        ghi = self.results["GHI"][day]
-        dhi = self.results["DHI"][day]
-        dni = self.results["DNI"][day]
-        residual = np.abs(ghi - (dhi + dni * cos_z))
-        assert np.all(residual < 5.0), (
-            f"ERA5-Land balance failed: max residual "
-            f"{residual.max():.2f} W/m2"
+        assert np.all(self.results["GHI"][night] == 0.0), (
+            "ERA5-Land GHI: night values must be 0"
         )
 
     def test_output_length(self):
@@ -324,25 +320,23 @@ class TestDimensionalAlignment:
             provider="ERA5_LAND",
             sol_pos=sol_pos,
             times=times,
+            fields=["GHI"],
         )
 
     def test_all_providers_same_length(self):
-        for field in ("GHI", "DHI", "DNI"):
-            lengths = {
-                "COSMO_REA6": len(self.cosmo[field]),
-                "MERRA2": len(self.m2[field]),
-                "ERA5_LAND": len(self.e5[field]),
-            }
-            assert len(set(lengths.values())) == 1, (
-                f"{field} length mismatch across providers: "
-                f"{lengths}"
-            )
+        lengths = {
+            "COSMO_REA6": len(self.cosmo["GHI"]),
+            "MERRA2": len(self.m2["GHI"]),
+            "ERA5_LAND": len(self.e5["GHI"]),
+        }
+        assert len(set(lengths.values())) == 1, (
+            f"GHI length mismatch across providers: {lengths}"
+        )
 
     def test_all_providers_equal_n(self):
-        for field in ("GHI", "DHI", "DNI"):
-            assert len(self.cosmo[field]) == N
-            assert len(self.m2[field]) == N
-            assert len(self.e5[field]) == N
+        assert len(self.cosmo["GHI"]) == N
+        assert len(self.m2["GHI"]) == N
+        assert len(self.e5["GHI"]) == N
 
 
 # ---------------------------------------------------------------------------

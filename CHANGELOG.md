@@ -9,6 +9,129 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-21
+
+### Added
+
+- **ERA5-Land: full pipeline implementation** — provider is now
+  `status: implemented` (was `scaffold`). Added
+  `src/weather/providers/era5_land/download.py` (monthly CDS download
+  orchestration), `downloader.py` (rewritten CDS request/retry logic),
+  `fast_download.py` (parallel multi-connection HTTP range download of
+  the CDS result), `transform.py` (GRIB → analysis-ready dataset:
+  de-accumulate `ssrd`, Spencer SZA night-mask), `export.py` (monthly
+  NetCDF-4, zlib, float32), `pipeline.py` (wires download → transform →
+  export for one year), `pipeline_interleaved.py` (overlaps download and
+  transform so wall-clock time is `max(download, transform)` instead of
+  their sum), `dni_pointwise.py` (opt-in point/region DNI-DHI
+  decomposition via pvlib DIRINT/DISC, since ERA5-Land only stores GHI
+  in bulk), and `sample_call.py` (reference snippet for the ECMWF
+  Datastores client / cdsapi).
+- **ERA5-Land: percentile support** —
+  `src/weather/providers/era5_land/percentile_index.py`, a structural
+  port of COSMO's KS-distance P10/P50/P90 representative-year script.
+- **MERRA-2: full pipeline implementation** — provider is now
+  `status: implemented` (was `scaffold`). Added
+  `src/weather/providers/merra2/download.py` (OPeNDAP download
+  orchestration per `(collection, day)`), rewritten `downloader.py`
+  (Earthdata/URS session handling), `transform.py` (merges daily
+  `rad`/`slv` collections into a monthly dataset, derives GHI/WS_10M/RH),
+  `export.py` (monthly NetCDF-4, zlib, float32), and `pipeline.py`
+  (wires download → transform → export for one year).
+- **CLI** (`src/weather/cli.py`): added `--months` (ERA5-Land subset of
+  months), `--ncores` (ERA5-Land/COSMO worker count), `--no-night-mask`
+  (disable Spencer SZA night-masking, ERA5-Land only), and `--resume`
+  (skip months/years whose output already exists). `_cmd_run` now
+  branches on `provider.name` to build provider-specific kwargs, since
+  ERA5-Land's `run_pipeline` signature differs from COSMO's.
+- **`settings.py`**: added `EnvSettings.merra2_area()` / `era5_area()`
+  (CDS-style `"N,W,S,E"` bounding-box parsing, both default to the same
+  Europe box `72,-11,34,32`) and `merra2_opendap_max_concurrent()`
+  (default 8, since GES DISC has no per-account job queue, unlike CDS).
+- **`common/net.py`**: added `_AuthPreservingSession` and
+  `build_session(..., preserve_auth_hosts=...)` — re-attaches the
+  `Authorization` header across the cross-host redirect chain used by
+  NASA Earthdata login, which `requests` strips by default as a CSRF
+  precaution.
+- **`common/derived_attributes.py`**: added `_era5_rh` (Magnus-formula
+  relative humidity from `t2m`/`d2m`) and `_era5_wind_speed`
+  (`sqrt(u10**2 + v10**2)`), registered as `ERA5_LAND.RH` and
+  `ERA5_LAND.WS_10M` in `DERIVED_FIELDS`.
+- **`providers/merra2/downloaded_attributes.py`**: added `COLLECTIONS`
+  dict (`rad`/`slv` GES DISC collection names) and an
+  `attrs_by_collection()` helper; each attribute entry now tags its
+  source `collection`. Replaced `SNODP`/`PRECSNOLAND` with `QV2M`
+  (specific humidity, feeds the RH formula) and `ALBEDO`.
+- **Docs**: `docs/BULK_RUN_GUIDE_ERA5-LAND.md`, `docs/DOWNLOAD_AND_LOGGING.md`,
+  `docs/MERRA2_PIPELINE_GUIDE.md`.
+- **Tests/tools**: ERA5-Land pipeline runners (`test_era5_one_month.py`,
+  `test_era5_one_year.py`, `test_era5_multi_year.py`), MERRA-2 pipeline
+  runners (`test_merra2_one_month.py`, `test_merra2_one_year.py`,
+  `test_merra2_multi_year.py`), ERA5-Land boundary/diagnostic tools
+  (`repair_month_boundaries.py`, `verify_months.py`,
+  `check_boundary_steps.py`, `check_first_hour.py`, `diagnose_nc.py`,
+  `enumerate_month.py`, `inspect_era5_eccodes.py`, `inspect_era5_grib.py`),
+  and `audit_imports.py` (lint tool enforcing global-imports-only).
+- **`scripts/run_era5_bulk.sh`**: launch script for a full ERA5-Land
+  bulk run.
+- **`CLAUDE.md`** and **`.claude/`**: added the persistent project
+  context file and per-provider `.claude/{cosmo_rea6,era5_land,merra2}/`
+  context/plan docs, plus `.claude/open.md` / `resolved.md` issue
+  tracking.
+
+### Changed
+
+- **`providers/README.md`**: `base_percentile.py` documented as dead
+  code — the template-method P10/P50/P90 design was superseded by the
+  standalone `percentile_index.py` scripts now used by both COSMO-REA6
+  and ERA5-Land.
+- **`providers/era5_land/__init__.py`** / **`providers/merra2/__init__.py`**:
+  now thin façades over their `pipeline.run_pipeline`;
+  `validate_environment()` checks real package imports and credentials
+  (CDS `~/.cdsapirc` / Earthdata auth) instead of a static message;
+  `run_pipeline()` translates/drops COSMO-only CLI kwargs rather than
+  erroring.
+- **`providers/era5_land/config.py`**: added `area`, `cds_max_concurrent`,
+  `cds_max_retries`, `download_connections` to the resolved config dict.
+- **`providers/merra2/config.py`**: added `area` and
+  `opendap_max_concurrent`.
+- **COSMO-REA6**: default `--complevel` (zlib compression) changed from
+  `5` to `1` in `cli.py` and `providers/cosmo_rea6/pipeline.py`, trading
+  file size for faster writes; `export.py`/`naming.py` docstrings
+  updated from stale `buem.weather.*` import paths.
+- **`.env.example`**: rewritten to cover all three providers — added
+  `ERA5_DATA_FORMAT`, `ERA5_CDS_MAX_CONCURRENT`, `ERA5_USE_ARIA2`,
+  `ERA5_CDS_URL`/`ERA5_CDS_KEY`, `ERA5_AREA`,
+  `EARTHDATA_USERNAME`/`PASSWORD`, `MERRA2_OPENDAP_MAX_CONCURRENT`,
+  `MERRA2_AREA`.
+- **`infrastructure/env/weather_env.yml`**: added `ecmwf-datastores-client`
+  and `aria2` (parallel multi-connection downloader); pinned
+  `python=3.12.*` explicitly.
+- **`scripts/common.sh`**: `.env` is now stripped of `\r` before
+  `source`, so a CRLF-saved `.env` no longer breaks on the Linux server.
+- **`.gitignore`**: added `deploy_to_server.ps1`.
+- **`LICENSE`**: copyright year range updated `2024-2026` → `2025-2027`.
+- **`src/weather/tests/README.md`**: rewritten with a category table
+  (pytest units vs. pipeline runners vs. diagnostic tools) covering the
+  new ERA5-Land/MERRA-2 runners and tools.
+
+### Fixed
+
+- **`common/derived_attributes.py`**: `ERA5_LAND` registry no longer
+  advertises `DHI`/`DNI` (those require a per-site DIRINT/DISC
+  decomposition that cannot broadcast over a `(time, y, x)` grid — moved
+  to the opt-in `dni_pointwise.py` helper); `test_derived_attributes.py`
+  updated to match (`GHI`/`RH`/`WS_10M` for ERA5-Land).
+- Lint/type fixes across new diagnostic scripts under `src/weather/tests/`
+  (`audit_imports.py`, `check_first_hour.py`, `enumerate_month.py`,
+  `inspect_era5_grib.py`) and `providers/era5_land/pipeline_interleaved.py`
+  to satisfy `ruff check src/` and `mypy src`.
+- **`providers/era5_land/sample_call.py`**: removed a module-level
+  `client.check_authentication()` network call and hardcoded local
+  Windows paths (`D:/test/...`) from download targets.
+
+---
+
 ## [1.3.0] - 2026-06-28
 
 ### Added
@@ -26,6 +149,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `relative humidity` attribute to `downloaded_attributes.py`
   of `cosmo-rea6`, `era5_land`, and `merra2` submodules.
 - Minor updates to .gitignore, CONTRIBUTING.md, and README.md
+
+---
 
 ## [1.2.0] — 2026-06-15
 

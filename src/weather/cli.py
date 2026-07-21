@@ -101,6 +101,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Year to process (e.g. 2020).",
     )
     run_p.add_argument(
+        "--months",
+        type=int,
+        nargs="+",
+        default=None,
+        metavar="M",
+        help=(
+            "Subset of months to process (1-12). "
+            "ERA5-Land only; COSMO-REA6 processes the full year."
+        ),
+    )
+    run_p.add_argument(
+        "--ncores",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Worker count (ERA5-Land transform / COSMO phases).",
+    )
+    run_p.add_argument(
         "--work-dir",
         default=None,
         metavar="DIR",
@@ -110,19 +128,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         default=None,
         metavar="PATH",
-        help="Output NetCDF file path.",
+        help="Output NetCDF file path (COSMO-REA6 only).",
     )
     run_p.add_argument(
         "--no-wind-components",
         action="store_true",
-        help="Exclude raw U_10M / V_10M from output.",
+        help="Exclude raw U_10M / V_10M from output (COSMO-REA6 only).",
+    )
+    run_p.add_argument(
+        "--no-night-mask",
+        action="store_true",
+        help="Disable Spencer SZA night-masking of GHI (ERA5-Land only).",
     )
     run_p.add_argument(
         "--complevel",
         type=int,
-        default=5,
+        default=1,
         metavar="N",
-        help="zlib compression level 1-9 (default: 5).",
+        help="zlib compression level 1-9 (default: 1).",
     )
     run_p.add_argument(
         "--skip-download",
@@ -132,7 +155,15 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--skip-decompress",
         action="store_true",
-        help="Skip decompression step (assume .grb files already present).",
+        help=(
+            "Skip decompression step (COSMO-REA6 only; ERA5-Land has "
+            "no decompress phase)."
+        ),
+    )
+    run_p.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip months/years whose output already exists.",
     )
     run_p.add_argument(
         "--cleanup",
@@ -201,16 +232,38 @@ def _cmd_run(args: argparse.Namespace) -> None:
         if args.provider
         else get_default_provider()
     )
-    nc_path = provider.run_pipeline(
-        year=args.year,
-        work_dir=Path(args.work_dir) if args.work_dir else None,
-        output_path=Path(args.output) if args.output else None,
-        include_wind_components=not args.no_wind_components,
-        complevel=args.complevel,
-        skip_download=args.skip_download,
-        skip_decompress=args.skip_decompress,
-        cleanup=args.cleanup,
-    )
+
+    work_dir = Path(args.work_dir) if args.work_dir else None
+
+    # Build provider-specific kwargs.  ERA5-Land has no decompress step
+    # and a per-month/single-folder output, so its run_pipeline takes a
+    # different signature than COSMO-REA6.
+    if provider.name == "era5-land":
+        kwargs = {
+            "year": args.year,
+            "months": args.months,
+            "work_dir": work_dir,
+            "ncores": args.ncores,
+            "night_mask": not args.no_night_mask,
+            "complevel": args.complevel,
+            "skip_download": args.skip_download,
+            "resume": args.resume,
+            "cleanup": args.cleanup,
+        }
+    else:
+        # COSMO-REA6 (and providers sharing its signature).
+        kwargs = {
+            "year": args.year,
+            "work_dir": work_dir,
+            "output_path": Path(args.output) if args.output else None,
+            "include_wind_components": not args.no_wind_components,
+            "complevel": args.complevel,
+            "skip_download": args.skip_download,
+            "skip_decompress": args.skip_decompress,
+            "cleanup": args.cleanup,
+        }
+
+    nc_path = provider.run_pipeline(**kwargs)
     print(f"\nOutput: {nc_path}")
 
 

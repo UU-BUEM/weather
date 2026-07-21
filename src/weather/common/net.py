@@ -47,6 +47,32 @@ _DEFAULT_TIMEOUT = (10, 300)           # (connect, read) seconds
 # Session / adapter
 # ---------------------------------------------------------------------------
 
+class _AuthPreservingSession(requests.Session):
+    """A ``requests.Session`` that re-attaches ``Authorization`` on redirect.
+
+    ``requests`` strips the ``Authorization`` header whenever a redirect
+    crosses to a different host, as a security precaution against leaking
+    credentials to an untrusted domain (see ``Session.rebuild_auth``).  NASA
+    Earthdata's login flow relies on exactly this kind of cross-host
+    redirect (``urs.earthdata.nasa.gov`` <-> the GES DISC data host), so the
+    default behaviour breaks authentication mid-chain.  This subclass
+    re-attaches the header when the redirect target's host is explicitly
+    trusted (``_preserve_hosts``).
+    """
+
+    _preserve_hosts: frozenset[str] = frozenset()
+
+    def rebuild_auth(self, prepared_request: Any, response: Any) -> None:
+        from urllib.parse import urlparse
+
+        original_auth = response.request.headers.get("Authorization")
+        super().rebuild_auth(prepared_request, response)
+        if original_auth and not prepared_request.headers.get("Authorization"):
+            host = urlparse(prepared_request.url).hostname
+            if host in self._preserve_hosts:
+                prepared_request.headers["Authorization"] = original_auth
+
+
 def build_session(
     auth: tuple[str, str] | None = None,
     *,
@@ -54,6 +80,7 @@ def build_session(
     backoff_factor: float = _DEFAULT_BACKOFF_FACTOR,
     status_forcelist: tuple[int, ...] = _DEFAULT_STATUS_FORCELIST,
     timeout: tuple[int, int] = _DEFAULT_TIMEOUT,
+    preserve_auth_hosts: frozenset[str] | None = None,
 ) -> requests.Session:
     """Return a ``requests.Session`` pre-configured with retry and
     optional auth.
@@ -72,6 +99,11 @@ def build_session(
     timeout:
         ``(connect_timeout, read_timeout)`` in seconds stored on the session
         so callers can pass ``timeout=session._default_timeout``.
+    preserve_auth_hosts:
+        Set of hostnames for which ``Authorization`` should survive a
+        cross-host redirect (see :class:`_AuthPreservingSession`).  Needed
+        for NASA Earthdata's URS <-> GES-DISC redirect chain; leave ``None``
+        for providers without this quirk (default ``requests`` behaviour).
     """
     retry_strategy = Retry(
         total=retries,
@@ -82,7 +114,12 @@ def build_session(
     )
     adapter = HTTPAdapter(max_retries=retry_strategy)
 
-    session = requests.Session()
+    if preserve_auth_hosts:
+        auth_session = _AuthPreservingSession()
+        auth_session._preserve_hosts = frozenset(preserve_auth_hosts)
+        session: requests.Session = auth_session
+    else:
+        session = requests.Session()
     session.mount("https://", adapter)
     session.mount("http://", adapter)
 

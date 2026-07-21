@@ -247,6 +247,39 @@ class EnvSettings:
         """SLURM notification e-mail (MERRA_SLURM_EMAIL)."""
         return os.getenv("MERRA_SLURM_EMAIL", "")
 
+    @staticmethod
+    def merra2_area() -> list[float]:
+        """Geographic bounding box for OPeNDAP requests (MERRA2_AREA).
+
+        Order is ``[North, West, South, East]`` in degrees, matching
+        :meth:`era5_area`'s CDS convention.  Unlike ERA5-Land (global by
+        default), MERRA-2 defaults to the same Europe box used there
+        (``72,-11,34,32``), since this pipeline crops MERRA-2 to Europe
+        only — set ``MERRA2_AREA`` in ``.env`` to override.
+        """
+        raw = os.getenv("MERRA2_AREA", "72,-11,34,32").strip()
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        if len(parts) != 4:
+            raise ValueError(
+                f"MERRA2_AREA must be 'N,W,S,E' (4 numbers), got: {raw!r}"
+            )
+        try:
+            return [float(p) for p in parts]
+        except ValueError as exc:
+            raise ValueError(
+                f"MERRA2_AREA values must be numeric, got: {raw!r}"
+            ) from exc
+
+    @staticmethod
+    def merra2_opendap_max_concurrent() -> int:
+        """Parallel OPeNDAP requests (MERRA2_OPENDAP_MAX_CONCURRENT).
+
+        Unlike ERA5-Land's CDS queue (effectively 1 job/account), GES
+        DISC's OPeNDAP server has no per-account job queue, so this can
+        default higher.
+        """
+        return int(os.getenv("MERRA2_OPENDAP_MAX_CONCURRENT", "8"))
+
     # ------------------------------------------------------------------
     # ERA5-Land
     # ------------------------------------------------------------------
@@ -320,6 +353,37 @@ class EnvSettings:
     def era5_download_format() -> str:
         """CDS download packaging format (ERA5_DOWNLOAD_FORMAT)."""
         return os.getenv("ERA5_DOWNLOAD_FORMAT", "unarchived")
+
+    @staticmethod
+    def era5_area() -> list[float] | None:
+        """Optional geographic bounding box for CDS requests (ERA5_AREA).
+
+        CDS ``area`` order is ``[North, West, South, East]`` in degrees
+        (west/east may be negative).  Cropping shrinks each GRIB message
+        dramatically — e.g. Europe is ~24x smaller than the global grid,
+        which both cuts storage and avoids eccodes memory-allocation
+        failures when reading/de-accumulating large global fields.
+
+        Set in ``.env`` as a comma-separated string, e.g.::
+
+            ERA5_AREA=72,-25,34,45      # core Europe
+
+        Returns ``None`` (global) when unset or blank.
+        """
+        raw = os.getenv("ERA5_AREA", "").strip()
+        if not raw:
+            return None
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        if len(parts) != 4:
+            raise ValueError(
+                f"ERA5_AREA must be 'N,W,S,E' (4 numbers), got: {raw!r}"
+            )
+        try:
+            return [float(p) for p in parts]
+        except ValueError as exc:
+            raise ValueError(
+                f"ERA5_AREA values must be numeric, got: {raw!r}"
+            ) from exc
 
     @staticmethod
     def era5_cds_url() -> str:

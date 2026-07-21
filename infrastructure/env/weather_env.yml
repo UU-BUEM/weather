@@ -14,31 +14,34 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python>=3.12
-  # Core runtime (pinned for reproducibility)
+  - bottleneck>=1.3.*        # fast NaN-aware ops (xarray ffill/rolling); optional but recommended
+  - cdsapi>=0.7.*
   - cfgrib>=0.9.*
   - cupy>=14.1.*             # GPU-accelerated NumPy-like library; install cupy-cuda12x for CUDA 12.x
   - dask>=2024.*
   - eccodes>=2.34.*
+  - ecmwf-datastores-client>=0.5.*
   - jupyter # optional
   - matplotlib>=3.10.*
   - netcdf4>=1.6.*
   - numba>=0.65.*            # JIT compiler for Python; used in percentile index calculation
   - numpy>=1.26.*
   - pandas>=2.2.*
+  - pvlib>=0.11.*
+  - pyarrow>=15.*
   - pyproj>=3.6.*
+  - python=3.12.*             # Core runtime (pinned for reproducibility)
   - python-dotenv>=1.0.*
   - requests>=2.31.*
   - urllib3>=2.2.*
   - scipy>=1.16.*
   - xarray>=2024.*
   # Optional but recommended
-  - lbzip2                 # parallel bzip2 C binary; faster than Python bz2 per file;
-                           # use COSMO_THREADS_PER_JOB=1 with bulk ProcessPoolExecutor
+  - lbzip2                  # parallel bzip2 C binary; faster than Python bz2 per file;
   - h5py>=3.11.*            # direct HDF5 chunk copy for NetCDFMerger (weather.common.merge)
-  - pvlib>=0.11.*
-  - pyarrow>=15.*
-  - cdsapi>=0.7.*
+  - bottleneck>=1.3.*       # fast NaN-aware ops; xarray .ffill() imports it
+  - aria2                   # parallel multi-connection downloader.
+
   # Dev / test tools
   - pytest>=8.*
   - pytest-cov>=5.*

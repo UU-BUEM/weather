@@ -85,7 +85,7 @@ def run_pipeline(
     include_wind_components : bool
         Keep raw U_10M / V_10M in the NetCDF (default ``True``).
     complevel : int
-        zlib compression level for NetCDF (default 5).
+        zlib compression level for NetCDF (default 1).
     skip_download : bool
         Skip downloading (assume ``.grb.bz2`` files already present).
     skip_decompress : bool

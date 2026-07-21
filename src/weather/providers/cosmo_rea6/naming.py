@@ -23,6 +23,7 @@ import os
 #   {ATTR}.2D.{YYYYMM}.grb.bz2
 # e.g. SWDIRS_RAD.2D.201801.grb.bz2
 
+
 def grib_filename(attribute: str, year: int, month: int) -> str:
     """Return the standard GRIB filename for a given attribute/period.
 

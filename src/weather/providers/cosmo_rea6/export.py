@@ -1,12 +1,12 @@
 """Export processed COSMO-REA6 data to compressed NetCDF.
 
 Writes the annual :class:`xarray.Dataset` produced by
-:func:`~buem.weather.transform.build_annual_dataset` to a single NetCDF-4
-file with zlib compression, following CF-1.8 conventions.
+:func:`~weather.providers.cosmo_rea6.transform.build_annual_dataset` to a
+single NetCDF-4 file with zlib compression, following CF-1.8 conventions.
 
 Typical usage::
 
-    from buem.weather.export import export_netcdf
+    from weather.providers.cosmo_rea6.export import export_netcdf
     export_netcdf(ds, Path("/data/output/COSMO_REA6_2018.nc"))
 """
 
@@ -135,7 +135,7 @@ def export_single_point_csv(
     """Extract a single grid-cell time series and write to CSV.
 
     Useful for extracting weather data for a specific building location
-    in the format expected by :class:`~buem.weather.from_csv.CsvWeatherData`.
+    in the format expected by :class:`~weather.from_csv.CsvWeatherData`.
 
     Parameters
     ----------
@@ -154,7 +154,7 @@ def export_single_point_csv(
     Notes
     -----
     The output CSV contains columns ``T``, ``GHI``, ``DHI`` matching the
-    format expected by :class:`~buem.weather.from_csv.CsvWeatherData`.
+    format expected by :class:`~weather.from_csv.CsvWeatherData`.
     DNI must be reconstructed by the thermal model using pvlib DISC from GHI.
     """
     import pandas as pd  # noqa: F811
