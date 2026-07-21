@@ -102,7 +102,7 @@ if NUMBA_AVAILABLE:
         best_p50 = np.zeros((rows, cols), dtype=np.int32)
         best_p90 = np.zeros((rows, cols), dtype=np.int32)
 
-        for r in prange(rows):  # noqa: E741
+        for r in prange(rows):  # type: ignore[attr-defined]  # noqa: E741
             for c in range(cols):
                 v10 = val_p10[r, c]
                 v50 = val_p50[r, c]
