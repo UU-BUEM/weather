@@ -90,10 +90,6 @@ def export_netcdf(
         fname = f"COSMO_REA6_{yr}.nc"
         output_path = cfg["output_dir"] / fname
 
-    if output_path.exists() and output_path.stat().st_size > 0:
-        logger.info("NetCDF already exists, skipping export: %s", output_path)
-        return output_path
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Materialise dask arrays into in-memory arrays BEFORE writing.

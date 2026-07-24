@@ -26,7 +26,7 @@ def get_config() -> dict[str, Any]:
     dict[str, Any]
         Keys: ``work_dir``, ``download_dir``, ``processed_dir``,
         ``output_dir``, ``year``, ``attributes``, ``ncores``,
-        ``threads_per_job``, ``conda_env``, ``area``,
+        ``threads_per_job``, ``conda_env``, ``cleanup``, ``area``,
         ``opendap_max_concurrent``.
     """
     return {
@@ -39,6 +39,7 @@ def get_config() -> dict[str, Any]:
         "ncores": EnvSettings.merra2_ncores(),
         "threads_per_job": EnvSettings.merra2_threads_per_job(),
         "conda_env": EnvSettings.merra2_conda_env(),
+        "cleanup": EnvSettings.merra2_cleanup(),
         # Geographic crop [N, W, S, E]; Europe by default (see
         # EnvSettings.merra2_area).
         "area": EnvSettings.merra2_area(),

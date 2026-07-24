@@ -51,6 +51,7 @@ merge = ["h5py>=3.11"]
 solar = ["pvlib>=0.10"]
 parquet = ["pyarrow>=15.0"]
 era5 = ["cdsapi>=0.7"]
+excel = ["openpyxl>=3.1"]
 dev = [
     "mypy>=1.8",
     "pytest>=7.4",

@@ -39,6 +39,14 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from ...common.derived_attributes import (
+    DNI_ELEVATION_THRESHOLD_DEG,
+    dni_from_direct,
+    ghi_from_diffuse_direct,
+    wind_speed,
+)
+from .downloaded_attributes import ATTRIBUTES, canonical_name, passthrough_attrs
+
 if TYPE_CHECKING:
     import xarray  # noqa: F401  # type: ignore[import-untyped]
 
@@ -311,12 +319,15 @@ def compute_ghi(
     Notes
     -----
     Both inputs are clipped to ``[0, ∞)`` before summing — negative
-    irradiance (rare GRIB artefact) is physically impossible.
+    irradiance (rare GRIB artefact) is physically impossible. The
+    actual formula is :func:`~weather.common.derived_attributes.
+    ghi_from_diffuse_direct` (single source of truth, also used by
+    ``derived_attributes._cosmo_ghi``).
     """
     diffuse = _resolve_var(ds_diffuse, diffuse_var)
     direct = _resolve_var(ds_direct, direct_var)
 
-    ghi = diffuse.clip(min=0) + direct.clip(min=0)
+    ghi = ghi_from_diffuse_direct(diffuse, direct)
     ghi.attrs = {"units": "W/m2", "long_name": "Global Horizontal Irradiance"}
     return ghi
 
@@ -366,13 +377,15 @@ def compute_wind_speed(
     Returns
     -------
     xarray.DataArray
-        Wind speed at 10 m in m/s.
+        Wind speed at 10 m in m/s. Formula is
+        :func:`~weather.common.derived_attributes.wind_speed` (single
+        source of truth, shared with every provider).
     """
     xr = _import_xarray()
     u = _resolve_var(ds_u, u_var)
     v = _resolve_var(ds_v, v_var)
     ws: xarray.DataArray = xr.DataArray(
-        np.sqrt(u ** 2 + v ** 2),
+        wind_speed(u, v),
         coords=u.coords,
         dims=u.dims,
         attrs={"units": "m/s", "long_name": "Wind speed at 10m"},
@@ -383,7 +396,7 @@ def compute_wind_speed(
 def compute_dni(
     ds_direct: xarray.Dataset,
     *,
-    elevation_threshold: float = 5.0,
+    elevation_threshold: float = DNI_ELEVATION_THRESHOLD_DEG,
 ) -> xarray.DataArray:
     """Compute per-cell Direct Normal Irradiance (DNI) in W/m².
 
@@ -572,10 +585,13 @@ def compute_dni(
     cos_da: xarray.DataArray = xr.DataArray(cos_sza_safe, dims=swdirs.dims)
     elev_da: xarray.DataArray = xr.DataArray(elevation, dims=swdirs.dims)
 
-    dni_raw: xarray.DataArray = swdirs / cos_da
-    # Zero-out cells where sun is below threshold (physically: no direct beam)
-    dni: xarray.DataArray = xr.where(
-        elev_da >= elevation_threshold, dni_raw, 0.0
+    # Formula (division + threshold zero-out) is
+    # derived_attributes.dni_from_direct -- single source of truth,
+    # also used by derived_attributes._cosmo_dni. cos_da/elev_da are
+    # already bounded above ([1e-3, 1.0] / Spencer elevation), so no
+    # extra work happens here versus the previous inline version.
+    dni: xarray.DataArray = dni_from_direct(
+        swdirs, cos_da, elev_da, elevation_threshold,
     ).rename("DNI")
 
     dni.attrs = {
@@ -822,3 +838,97 @@ def build_annual_dataset(
         len(out.data_vars), out.sizes.get("time", 0),
     )
     return out
+
+
+def _passthrough_var(
+    datasets: dict[str, xarray.Dataset], attr: str,
+) -> xarray.DataArray:
+    """Build one output :class:`~xarray.DataArray` for a
+    ``role: "passthrough"`` attribute (see
+    :data:`~weather.providers.cosmo_rea6.downloaded_attributes.ATTRIBUTES`)
+    using only its registered ``unit_target``/``description`` -- no
+    per-variable code. Not for ``role: "formula"`` attributes (T_2M,
+    SWDIFDS_RAD, SWDIRS_RAD, U_10M, V_10M), which need real derivations.
+    """
+    meta = ATTRIBUTES[attr]
+    name = canonical_name(attr)
+    da = _strip_scalar_coords(_resolve_var(datasets[attr], attr)).rename(name)
+    da.attrs.update({
+        "units": meta["unit_target"],
+        "long_name": meta["description"],
+    })
+    return da
+
+
+def build_month_dataset(
+    year: int,
+    month: int,
+    *,
+    grb_dir: Path | None = None,
+    compute_dni_field: bool = True,
+) -> tuple[xarray.Dataset, dict[str, xarray.Dataset]]:
+    """Assemble one month's full COSMO-REA6 output dataset.
+
+    The single place that turns every attribute in
+    :data:`~weather.providers.cosmo_rea6.downloaded_attributes.ATTRIBUTES`
+    into an output variable: T/GHI/DHI/WS_10M via the explicit formulas
+    below (``role: "formula"``), every other registered attribute via
+    :func:`_passthrough_var` (``role: "passthrough"``). Adding or
+    removing a passthrough attribute in ``downloaded_attributes.py``
+    changes the next run's output automatically -- no edits needed here
+    or in ``tests/test_cosmo_one_month.py`` / ``tests/test_cosmo_one_year.py``,
+    which both call this function instead of assembling the dataset
+    themselves (previously two independent, hand-duplicated copies of
+    this same assembly logic).
+
+    Parameters
+    ----------
+    year, month : int
+        Target period.
+    grb_dir : Path, optional
+        Root decompressed-GRIB directory (default from config).
+    compute_dni_field : bool
+        If ``True`` (default), also compute the experimental per-cell
+        DNI (see :func:`compute_dni`). Set ``False`` to skip it (e.g.
+        ``--skip-dni``).
+
+    Returns
+    -------
+    tuple[xarray.Dataset, dict[str, xarray.Dataset]]
+        The assembled month dataset, and the raw per-attribute datasets
+        (needed by callers for DNI outlier/stats logging against the raw
+        ``SWDIRS_RAD`` field).
+    """
+    xr = _import_xarray()
+
+    datasets = {
+        attr: open_grib_month(attr, year, month, grb_dir=grb_dir)
+        for attr in ATTRIBUTES
+    }
+
+    T = _strip_scalar_coords(convert_temperature(datasets["T_2M"]))
+    GHI = _strip_scalar_coords(
+        compute_ghi(datasets["SWDIFDS_RAD"], datasets["SWDIRS_RAD"])
+    )
+    DHI = _strip_scalar_coords(compute_dhi(datasets["SWDIFDS_RAD"]))
+    WS = _strip_scalar_coords(
+        compute_wind_speed(datasets["U_10M"], datasets["V_10M"])
+    )
+
+    data_vars: dict[str, xarray.DataArray] = {
+        "T": T, "GHI": GHI, "DHI": DHI, "WS_10M": WS,
+    }
+    for attr in passthrough_attrs():
+        da = _passthrough_var(datasets, attr)
+        data_vars[str(da.name)] = da
+
+    if compute_dni_field:
+        DNI = _strip_scalar_coords(compute_dni(datasets["SWDIRS_RAD"]))
+        data_vars["DNI"] = DNI
+
+    ds_out = xr.Dataset(data_vars)
+    logger.info(
+        "Month dataset assembled: %d variables, %d timesteps",
+        len(ds_out.data_vars), ds_out.sizes.get("time", 0),
+    )
+    return ds_out, datasets

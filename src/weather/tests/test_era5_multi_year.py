@@ -70,6 +70,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from weather.settings import EnvSettings
+
 _here = Path(__file__).resolve().parent
 _TEST_ONE_YEAR = _here / "test_era5_one_year.py"
 
@@ -126,8 +128,16 @@ def _parse_args() -> argparse.Namespace:
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--from-year", type=int, default=1940, metavar="YEAR")
-    p.add_argument("--to-year", type=int, default=2025, metavar="YEAR")
+    p.add_argument(
+        "--from-year", type=int, default=EnvSettings.era5_from_year(),
+        metavar="YEAR",
+        help="First year (default: ERA5_FROM_YEAR env var or 1940)",
+    )
+    p.add_argument(
+        "--to-year", type=int, default=EnvSettings.era5_to_year(),
+        metavar="YEAR",
+        help="Last year, inclusive (default: ERA5_TO_YEAR env var or 2025)",
+    )
     p.add_argument(
         "--ncores", type=int, default=None, metavar="N",
         help="Total transform cores shared across parallel years",
@@ -140,7 +150,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--resume", action="store_true")
     p.add_argument("--skip-download", action="store_true")
     p.add_argument("--night-mask", action="store_true")
-    p.add_argument("--cleanup", action="store_true")
+    p.add_argument(
+        "--cleanup", action="store_true",
+        default=EnvSettings.era5_cleanup(),
+        help="Delete GRIBs after successful export (default: keep, via ERA5_CLEANUP)",
+    )
     return p.parse_args()
 
 

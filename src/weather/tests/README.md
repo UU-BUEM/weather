@@ -103,6 +103,13 @@ python src/weather/tests/test_era5_multi_year.py --from-year 2018 --to-year 2020
 Common flags: `--work-dir DIR` · `--ncores N` · `--skip-download` ·
 `--resume` · `--cleanup` · `--night-mask` (era5-only, default off).
 
+**Long unattended server runs:** prefer `scripts/run_era5_bulk.sh` (tmux
+wrapper: conda activation, logging, and the mandatory
+`repair_month_boundaries.py`/`verify_months.py` steps below, run
+automatically) over calling `test_era5_multi_year.py` directly. See
+`docs/BULK_RUN_GUIDE_ERA5-LAND.md` for the bottleneck analysis and
+parallelization guidance behind the recommended flags.
+
 ### Boundary tools (mandatory step 4-5 above)
 
 ERA5-Land's monthly GRIB structure means each monthly file's **first**
@@ -163,6 +170,13 @@ Common flags: `--work-dir DIR` · `--ncores N` · `--skip-download` ·
 `--resume` · `--cleanup`. Requires NASA Earthdata credentials
 (`EARTHDATA_USERNAME`/`EARTHDATA_PASSWORD` or `~/.netrc`) — see
 `docs/MERRA2_PIPELINE_GUIDE.md`.
+
+**Long unattended server runs:** prefer `scripts/run_merra2_bulk.sh`
+(tmux wrapper: conda activation, logging, and an automatic
+`verify_merra2_months.py` QA pass — no boundary-repair step needed,
+unlike ERA5-Land) over calling `test_merra2_multi_year.py` directly.
+See `docs/BULK_RUN_GUIDE_MERRA2.md` for the bottleneck analysis and
+parallelization guidance behind the recommended flags.
 
 ---
 

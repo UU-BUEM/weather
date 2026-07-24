@@ -76,6 +76,8 @@ def cosmo_ds(zenith_degrees) -> dict:
         "SWDIFDS_RAD": ghi * 0.2,
         "SWDIRS_RAD": ghi * 0.8,
         "PS": np.full(N, 101_325.0),
+        "U_10M": np.full(N, 3.0),
+        "V_10M": np.full(N, 4.0),
     }
 
 
@@ -87,6 +89,10 @@ def merra2_ds(zenith_degrees) -> dict:
     return {
         "SWGDN": ghi,
         "PS": np.full(N, 101_325.0),
+        "QV2M": np.full(N, 0.005),  # kg/kg
+        "T2M": np.full(N, 15.0),  # already degC (unlike ERA5-Land's raw Kelvin)
+        "U10M": np.full(N, 3.0),
+        "V10M": np.full(N, 4.0),
     }
 
 
@@ -139,7 +145,7 @@ class TestMaskNight:
 # ---------------------------------------------------------------------------
 
 class TestCosmoREA6Derivations:
-    """Tests for COSMO-REA6 GHI, DHI, DNI formula functions."""
+    """Tests for COSMO-REA6 GHI, DHI, DNI, WS_10M formula functions."""
 
     @pytest.fixture(autouse=True)
     def _compute(self, cosmo_ds, sol_pos, times):
@@ -152,7 +158,11 @@ class TestCosmoREA6Derivations:
         self.zen = sol_pos["zenith"]
 
     def test_keys_present(self):
-        assert {"GHI", "DHI", "DNI"} <= self.results.keys()
+        assert {"GHI", "DHI", "DNI", "WS_10M"} <= self.results.keys()
+
+    def test_wind_speed(self):
+        """WS_10M = sqrt(U_10M**2 + V_10M**2) = sqrt(3**2 + 4**2) = 5."""
+        assert np.allclose(self.results["WS_10M"], 5.0)
 
     def test_no_negative_values(self):
         for name, arr in self.results.items():
@@ -161,9 +171,11 @@ class TestCosmoREA6Derivations:
             )
 
     def test_night_is_zero(self):
+        """Only GHI/DHI/DNI are irradiance (night-masked to 0); WS_10M
+        is a plain meteorological quantity that doesn't stop at night."""
         night = self.zen >= NIGHT_ZENITH_DEG
-        for name, arr in self.results.items():
-            assert np.all(arr[night] == 0.0), (
+        for name in ("GHI", "DHI", "DNI"):
+            assert np.all(self.results[name][night] == 0.0), (
                 f"COSMO-REA6 {name}: night values must be 0"
             )
 
@@ -203,7 +215,7 @@ pvlib = pytest.importorskip(
 
 
 class TestMERRA2Derivations:
-    """Tests for MERRA-2 GHI, DHI, DNI via DIRINT."""
+    """Tests for MERRA-2 GHI, DHI, DNI (via DIRINT), RH, WS_10M."""
 
     @pytest.fixture(autouse=True)
     def _compute(self, merra2_ds, sol_pos, times):
@@ -216,7 +228,14 @@ class TestMERRA2Derivations:
         self.zen = sol_pos["zenith"]
 
     def test_keys_present(self):
-        assert {"GHI", "DHI", "DNI"} <= self.results.keys()
+        assert {"GHI", "DHI", "DNI", "RH", "WS_10M"} <= self.results.keys()
+
+    def test_wind_speed(self):
+        """WS_10M = sqrt(U10M**2 + V10M**2) = sqrt(3**2 + 4**2) = 5."""
+        assert np.allclose(self.results["WS_10M"], 5.0)
+
+    def test_rh_in_range(self):
+        assert np.all((self.results["RH"] >= 0.0) & (self.results["RH"] <= 100.0))
 
     def test_no_negative_values(self):
         for name, arr in self.results.items():
@@ -225,9 +244,12 @@ class TestMERRA2Derivations:
             )
 
     def test_night_is_zero(self):
+        """Only GHI/DHI/DNI are irradiance (night-masked to 0); RH and
+        WS_10M are plain meteorological quantities that don't stop at
+        night."""
         night = self.zen >= NIGHT_ZENITH_DEG
-        for name, arr in self.results.items():
-            assert np.all(arr[night] == 0.0), (
+        for name in ("GHI", "DHI", "DNI"):
+            assert np.all(self.results[name][night] == 0.0), (
                 f"MERRA-2 {name}: night values must be 0"
             )
 

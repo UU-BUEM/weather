@@ -58,6 +58,10 @@ def build_parser() -> argparse.ArgumentParser:
             "  python -m weather validate\n"
             "  python -m weather run --year 2020 --months 1 2 3\n"
             "  python -m weather run --provider cosmo-rea6 --skip-download\n"
+            "  python -m weather geo list\n"
+            "  python -m weather geo crop --input ERA5_Land_2020_06.nc \\\n"
+            "      --output ERA5_Land_2020_06_netherlands.nc "
+            "--country netherlands\n"
             "\n"
             "Installed conda package only:\n"
             "  weather info\n"
@@ -171,6 +175,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="Remove downloaded / decompressed files after export.",
     )
 
+    # ── geo ─────────────────────────────────────────────────────────────────
+    geo_p = sub.add_parser(
+        "geo",
+        help="Country bounding-box lookup and NetCDF cropping.",
+    )
+    geo_sub = geo_p.add_subparsers(dest="geo_command", metavar="GEO_COMMAND")
+
+    geo_crop_p = geo_sub.add_parser(
+        "crop",
+        help="Crop a NetCDF file to a country's bounding box via cdo.",
+    )
+    geo_crop_p.add_argument(
+        "--input",
+        required=True,
+        metavar="PATH",
+        help="Input NetCDF file (ERA5-Land / MERRA-2 output).",
+    )
+    geo_crop_p.add_argument(
+        "--output",
+        required=True,
+        metavar="PATH",
+        help="Output path for the cropped NetCDF.",
+    )
+    geo_crop_p.add_argument(
+        "--country",
+        required=True,
+        metavar="NAME",
+        help="Country name, e.g. 'netherlands' (see 'weather geo list').",
+    )
+
+    geo_sub.add_parser(
+        "list",
+        help="List all recognised country names.",
+    )
+
     return parser
 
 
@@ -267,6 +306,27 @@ def _cmd_run(args: argparse.Namespace) -> None:
     print(f"\nOutput: {nc_path}")
 
 
+def _cmd_geo(args: argparse.Namespace) -> int:
+    from .geo import crop_to_country, list_countries
+
+    if args.geo_command == "list":
+        for name in list_countries():
+            print(name)
+        return 0
+
+    if args.geo_command == "crop":
+        try:
+            crop_to_country(Path(args.input), Path(args.output), args.country)
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            print(f"Error: {exc}")
+            return 1
+        print(f"Cropped: {args.output}")
+        return 0
+
+    print("Usage: weather geo {crop,list}")
+    return 1
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -292,6 +352,8 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(_cmd_validate(args))
     elif args.command == "run":
         _cmd_run(args)
+    elif args.command == "geo":
+        sys.exit(_cmd_geo(args))
     else:
         parser.print_help()
         sys.exit(1)

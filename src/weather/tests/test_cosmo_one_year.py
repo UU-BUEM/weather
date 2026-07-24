@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Full-year COSMO-REA6 pipeline: all 12 months, all 9 attributes.
+"""Full-year COSMO-REA6 pipeline: all 12 months, every attribute
+registered in ``downloaded_attributes.ATTRIBUTES``.
 
 test_cosmo_one_year.py
   └─ _decompress_all()
@@ -93,16 +94,10 @@ from concurrent.futures import (
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from weather.settings import EnvSettings
+
 if TYPE_CHECKING:
     import xarray  # noqa: F401
-
-# ---------------------------------------------------------------------------
-# Path bootstrap — allows running without a prior `pip install -e .`
-# ---------------------------------------------------------------------------
-_here = Path(__file__).resolve().parent   # src/weather/tests/
-_src = _here.parent.parent               # src/
-if (_src / "weather").is_dir() and str(_src) not in sys.path:
-    sys.path.insert(0, str(_src))
 
 # Prevent HDF5 file-locking deadlocks on GPFS / NFS file systems (HPC).
 os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
@@ -389,8 +384,8 @@ def _verify_decompressed(
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=(
-            "Full-year COSMO-REA6 pipeline — all 9 attributes, "
-            "12 months processed sequentially"
+            "Full-year COSMO-REA6 pipeline — all registered attributes "
+            "(see downloaded_attributes.py), 12 months processed sequentially"
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -431,10 +426,13 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--no-cleanup", action="store_true",
+        default=not EnvSettings.cosmo_cleanup(),
         help=(
             "Keep intermediate files (downloads, decompressed GRIBs, "
-            "cfgrib index files).  By default intermediates are removed "
-            "after each month's NetCDF is written."
+            "cfgrib index files).  Default: keep them (COSMO_CLEANUP=false, "
+            "the default) unless COSMO_CLEANUP=true in .env, in which case "
+            "intermediates are removed after each month's NetCDF is written "
+            "and this flag is needed to opt back into keeping them."
         ),
     )
     args = p.parse_args()
@@ -471,20 +469,11 @@ def main() -> None:  # noqa: C901 — intentionally long (pipeline steps)
     from weather.providers.cosmo_rea6.config import get_config
     from weather.providers.cosmo_rea6.export import export_netcdf
     from weather.providers.cosmo_rea6.naming import grib_filename
-    from weather.providers.cosmo_rea6.transform import (
-        _resolve_var,
-        _strip_scalar_coords,
-        compute_dhi,
-        compute_dni,
-        compute_ghi,
-        compute_wind_speed,
-        convert_temperature,
-        open_grib_month,
-    )
+    from weather.providers.cosmo_rea6.transform import build_month_dataset
 
     # Shared helpers — import after path bootstrap to avoid circular issues.
-    # logging.basicConfig in test_one_month is a no-op here (already set).
-    from weather.tests.test_one_month import (  # noqa: PLC0415
+    # logging.basicConfig in test_cosmo_one_month is a no-op here (already set).
+    from weather.tests.test_cosmo_one_month import (  # noqa: PLC0415
         _ALL_ATTRS,
         _log_dni_stats,
         _report_dni_outliers,
@@ -497,7 +486,7 @@ def main() -> None:  # noqa: C901 — intentionally long (pipeline steps)
         os.environ["COSMO_NCORES"] = str(args.ncores)
 
     try:
-        import xarray as xr
+        import xarray  # noqa: F401 -- fail fast with a clear message below
     except ImportError:
         sys.exit(
             "xarray is not installed.  "
@@ -553,7 +542,10 @@ def main() -> None:  # noqa: C901 — intentionally long (pipeline steps)
         )
 
     logger.info("=" * 68)
-    logger.info("COSMO-REA6 Annual Pipeline — all 9 attributes")
+    logger.info(
+        "COSMO-REA6 Annual Pipeline — all %d registered attributes",
+        len(_ALL_ATTRS),
+    )
     logger.info("  Year       : %d", year)
     logger.info(
         "  Months     : %s",
@@ -689,101 +681,30 @@ def main() -> None:  # noqa: C901 — intentionally long (pipeline steps)
 
         t_month = time.perf_counter()
         try:
-            # ── Step 1: Open GRIBs ────────────────────────────────────────
-            t0 = time.perf_counter()
-            logger.info(
-                "  [1/3] Opening %d GRIB files ...", len(_ALL_ATTRS),
-            )
-            datasets: dict = {}
-            for attr in _ALL_ATTRS:
-                datasets[attr] = open_grib_month(attr, year, month)
-            logger.info(
-                "  [1/3] done %.1f s", time.perf_counter() - t0,
-            )
-
-            # ── Step 2: Transform ─────────────────────────────────────────
+            # ── Step 1+2: Open GRIBs + Transform ────────────────────────────
+            # build_month_dataset() is the single shared assembly function
+            # (also used by test_cosmo_one_month.py) -- see its docstring
+            # and transform.py's module docstring for what it does.
             # dask.config.set(num_workers=ncores) was called before the
             # loop, so the threaded scheduler uses all allocated cores.
             # open_grib_month uses chunks={"time": 168} so the task graph
             # has enough parallelism to saturate those cores.
             t0 = time.perf_counter()
             logger.info(
-                "  [2/3] Transforming (dask %d workers) ...", ncores,
+                "  [1-2/3] Opening %d GRIB files + transforming "
+                "(dask %d workers) ...", len(_ALL_ATTRS), ncores,
             )
-
-            T = _strip_scalar_coords(
-                convert_temperature(datasets["T_2M"])
+            ds_out, datasets = build_month_dataset(
+                year, month, compute_dni_field=not args.skip_dni,
             )
-            GHI = _strip_scalar_coords(
-                compute_ghi(
-                    datasets["SWDIFDS_RAD"], datasets["SWDIRS_RAD"],
-                )
-            )
-            DHI = _strip_scalar_coords(
-                compute_dhi(datasets["SWDIFDS_RAD"])
-            )
-            WS = _strip_scalar_coords(
-                compute_wind_speed(datasets["U_10M"], datasets["V_10M"])
-            )
-
-            PS = (
-                _strip_scalar_coords(
-                    _resolve_var(datasets["PS"], "PS")
-                ).rename("PS")
-            )
-            PS.attrs.update({"units": "Pa", "long_name": "Surface pressure"})
-
-            HSNOW = (
-                _strip_scalar_coords(
-                    _resolve_var(datasets["H_SNOW"], "H_SNOW")
-                ).rename("H_SNOW")
-            )
-            HSNOW.attrs.update({"units": "m", "long_name": "Snow depth"})
-
-            SGSP = (
-                _strip_scalar_coords(
-                    _resolve_var(datasets["SNOW_GSP"], "SNOW_GSP")
-                ).rename("SNOW_GSP")
-            )
-            SGSP.attrs.update({
-                "units": "kg/m2", "long_name": "Stratiform snow",
-            })
-
-            SCON = (
-                _strip_scalar_coords(
-                    _resolve_var(datasets["SNOW_CON"], "SNOW_CON")
-                ).rename("SNOW_CON")
-            )
-            SCON.attrs.update({
-                "units": "kg/m2", "long_name": "Convective snow",
-            })
-
-            data_vars: dict = {
-                "T":        T,
-                "GHI":      GHI,
-                "DHI":      DHI,
-                "WS_10M":   WS,
-                "PS":       PS,
-                "H_SNOW":   HSNOW,
-                "SNOW_GSP": SGSP,
-                "SNOW_CON": SCON,
-            }
-
             if not args.skip_dni:
-                logger.info(
-                    "  Computing per-cell DNI (experimental) ..."
-                )
-                DNI = _strip_scalar_coords(
-                    compute_dni(datasets["SWDIRS_RAD"])
-                )
-                data_vars["DNI"] = DNI
-                _log_dni_stats(DNI, datasets["SWDIRS_RAD"])
+                logger.info("  Computing per-cell DNI (experimental) ...")
+                _log_dni_stats(ds_out["DNI"], datasets["SWDIRS_RAD"])
 
-            ds_out = xr.Dataset(data_vars)
             shapes = {k: list(v.shape) for k, v in ds_out.data_vars.items()}
             logger.info("  Variable shapes: %s", shapes)
             logger.info(
-                "  [2/3] done %.1f s", time.perf_counter() - t0,
+                "  [1-2/3] done %.1f s", time.perf_counter() - t0,
             )
 
             # ── Step 3: Export NetCDF ─────────────────────────────────────

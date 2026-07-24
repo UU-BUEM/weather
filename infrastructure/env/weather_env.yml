@@ -26,6 +26,7 @@ dependencies:
   - netcdf4>=1.6.*
   - numba>=0.65.*            # JIT compiler for Python; used in percentile index calculation
   - numpy>=1.26.*
+  - openpyxl>=3.1.*          # .xlsx export (tests/compare_providers.py)
   - pandas>=2.2.*
   - pvlib>=0.11.*
   - pyarrow>=15.*
@@ -41,6 +42,7 @@ dependencies:
   - h5py>=3.11.*            # direct HDF5 chunk copy for NetCDFMerger (weather.common.merge)
   - bottleneck>=1.3.*       # fast NaN-aware ops; xarray .ffill() imports it
   - aria2                   # parallel multi-connection downloader.
+  - cdo>=2.2.*              # NetCDF bbox cropping (weather.geo.crop / `weather geo crop`)
 
   # Dev / test tools
   - pytest>=8.*

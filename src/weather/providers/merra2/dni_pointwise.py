@@ -1,7 +1,8 @@
-"""Point- / region-wise DNI and DHI extraction for ERA5-Land.
+"""Point- / region-wise DNI and DHI extraction for MERRA-2.
 
-ERA5-Land stores only total shortwave (``GHI``, de-accumulated to
-hourly-mean W/m²).  Splitting it into Direct Normal Irradiance (DNI)
+MERRA-2 stores only total shortwave (``GHI``, direct from the
+instantaneous ``SWGDN`` field — no de-accumulation needed, unlike
+ERA5-Land's ``ssrd``).  Splitting it into Direct Normal Irradiance (DNI)
 and Diffuse Horizontal Irradiance (DHI) requires a *decomposition
 model* — and every such model carries real estimation uncertainty
 (RMSE ~80-120 W/m²).  Rather than bake one model choice into the
@@ -13,10 +14,13 @@ Why point-of-use, not bulk?
 ---------------------------
 The standard decomposition models (DISC, DIRINT, BRL) are formulated
 per site and operate on a 1-D time series.  Applying them to the full
-``(time, lat, lon)`` grid means looping/batching over every cell, which
-is slow and — because the result is a *model estimate* — usually not
-worth precomputing for the whole archive.  Extracting one building
-location (or a small bounding box) and decomposing just that is fast
+``(time, y, x)`` grid means looping/batching over every cell, which is
+slow and — because the result is a *model estimate* — usually not
+worth precomputing for the whole archive. This is also the reason
+``transform.py`` doesn't compute DNI/DHI in bulk: pvlib's DIRINT/DISC
+are 1-D-per-site and cannot broadcast over MERRA-2's full grid (see
+``transform.py``'s module docstring). Extracting one building location
+(or a small bounding box) and decomposing just that is fast
 (milliseconds to seconds) and keeps the modelling assumptions explicit.
 
 Two paths are provided:
@@ -28,19 +32,30 @@ Two paths are provided:
 
 Both use pvlib's NREL **SPA** solar position (gold-standard, <0.0003°)
 for the single column — affordable because it is one location, unlike
-the gridded case where Spencer is used for speed.
+the gridded case where Spencer is used for speed (see
+``transform.spencer_zenith``, reused from ``era5_land.transform``).
+
+Timestamp note
+--------------
+MERRA-2's hourly timestamps sit at ``HH:30`` (the averaging-interval
+midpoint), not ``HH:00`` like ERA5-Land/COSMO (see
+``docs/MERRA2_PIPELINE_GUIDE.md``'s "Timestamp convention" section).
+This has no effect here: the solar position (and hence DNI/DHI split)
+is computed at whatever timestamp the GHI series is actually indexed
+by, so the ``HH:30`` offset is handled correctly automatically — there
+is nothing to adjust in this module for it.
 
 Usage
 -----
 ::
 
     import xarray as xr
-    from weather.providers.era5_land.dni_pointwise import (
+    from weather.providers.merra2.dni_pointwise import (
         extract_dni_dhi_dirint,
     )
 
     ds = xr.open_mfdataset(
-        "/data/soma/era5_land/output/ERA5_LAND_2018_??_all_attrs.nc"
+        "/data/soma/merra2/output/MERRA2_2018_??_all_attrs.nc"
     )
     # Pick a location (nearest grid cell to a lat/lon):
     cell = ds.sel(latitude=52.1, longitude=4.3, method="nearest")
@@ -49,7 +64,7 @@ Usage
         ghi=cell["GHI"].to_series(),
         latitude=float(cell["latitude"]),
         longitude=float(cell["longitude"]),
-        pressure=cell["sp"].to_series(),   # Pa, optional
+        pressure=cell["PS"].to_series(),   # Pa, optional
     )
     dni = result["DNI"]   # pandas Series, W/m^2
     dhi = result["DHI"]
@@ -81,8 +96,8 @@ def _align_pressure(pressure: Any, times: pd.DatetimeIndex) -> pd.Series:
 
     ``ghi``'s index gets localized to UTC above (when tz-naive) before
     this is called, but a caller-supplied pressure Series is typically
-    still tz-naive (e.g. straight off ``ds["sp"/"PS"].to_series()``).
-    A plain ``.reindex(times)`` against a tz-aware target then silently
+    still tz-naive (e.g. straight off ``ds["PS"].to_series()``). A
+    plain ``.reindex(times)`` against a tz-aware target then silently
     returns all-NaN (tz-naive and tz-aware timestamps never compare
     equal), which propagates through pvlib's ``disc``/``dirint``
     airmass calculation into an all-zero DNI — no exception, no
@@ -110,18 +125,19 @@ def extract_dni_dhi_dirint(
     Parameters
     ----------
     ghi : pandas.Series
-        Hourly-mean GHI (W/m²) indexed by tz-aware UTC timestamps, as
-        stored by the ERA5-Land pipeline.
+        Hourly GHI (W/m^2) indexed by (tz-aware or naive UTC)
+        timestamps, as stored by the MERRA-2 pipeline (``HH:30``).
     latitude, longitude : float
         Location in degrees.
     pressure : pandas.Series or float, optional
-        Surface pressure in **Pascals** (ERA5-Land ``sp`` is already
-        Pa).  Defaults to standard atmosphere.
+        Surface pressure in **Pascals** (MERRA-2 ``PS`` is already Pa,
+        same convention as ERA5-Land's ``sp``). Defaults to standard
+        atmosphere.
 
     Returns
     -------
     dict
-        ``{"DNI": Series, "DHI": Series}`` in W/m², clipped >= 0.
+        ``{"DNI": Series, "DHI": Series}`` in W/m^2, clipped >= 0.
     """
     ghi = pd.Series(ghi)
     times = pd.DatetimeIndex(ghi.index)

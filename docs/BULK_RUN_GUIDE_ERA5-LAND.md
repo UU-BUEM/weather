@@ -20,28 +20,44 @@ awkward (WSL/Cygwin) and would replace already-working code. Skip both.
 
 ## Recommended run mode on the Linux server
 
-### 1. tmux (preferred — survives disconnect, lets you watch progress)
+### 1. tmux via the wrapper script (preferred)
+
+`scripts/run_era5_bulk.sh` wraps `test_era5_multi_year.py` with conda
+activation, `PYTHONPATH`, a timestamped log file, and automatically runs
+`repair_month_boundaries.py` (mandatory — fixes the first-hour GHI/sf
+boundary) then `verify_months.py` (QA) over the whole archive afterward
+(see that script's header; mirrored by `scripts/run_merra2_bulk.sh` /
+`docs/BULK_RUN_GUIDE_MERRA2.md` for MERRA-2, which needs no repair step):
 
     tmux new -s era5
     conda activate weather_env
-    # point work dir at the big volume, set Europe bbox:
     export ERA5_WORK_DIR=/data/soma/era5_land
     export ERA5_AREA=72,-11,34,32
     export ERA5_CDS_MAX_CONCURRENT=6
 
-    python src/weather/tests/test_era5_multi_year.py \
+    bash scripts/run_era5_bulk.sh \
         --from-year 1950 --to-year 2024 \
-        --ncores 8 --resume --cleanup
+        --ncores 8 --resume
 
     # detach: Ctrl-b then d      reattach: tmux attach -t era5
 
-### 2. nohup (fire-and-forget)
+No `--cleanup` above — the current default (`ERA5_CLEANUP=false`, see
+`.claude/open.md`'s cleanup-centralization entry) keeps downloaded GRIBs;
+disk budget below is sized accordingly. Pass `--cleanup` (or set
+`ERA5_CLEANUP=true`) if you'd rather reclaim disk automatically as each
+month finishes.
+
+### 2. nohup (fire-and-forget, no wrapper script)
 
     nohup python src/weather/tests/test_era5_multi_year.py \
         --from-year 1950 --to-year 2024 \
-        --ncores 8 --resume --cleanup \
+        --ncores 8 --resume \
         > era5_bulk.log 2>&1 &
     tail -f era5_bulk.log
+
+This skips the wrapper's automatic repair/verify passes — run those
+manually afterward if you use this mode
+(`repair_month_boundaries.py` then `verify_months.py`).
 
 --------------------------------------------------------------------
 
@@ -96,6 +112,12 @@ gain given the download wait.
 
 ## Disk budget (Europe crop, ~1.4 GB GRIB, ~few hundred MB nc per month)
 
-With --cleanup, each month's GRIB is deleted after its nc is written, so
-transient GRIB is at most (concurrency x 1.4 GB). Final nc archive for
-1950-2024 x 12 months is well under 1 TB - comfortable in 15 TB.
+Final nc archive for 1950-2024 x 12 months is well under 1 TB --
+comfortable in 15 TB. With the current default (keep everything,
+`ERA5_CLEANUP=false`), the raw GRIBs stay too -- total footprint is
+larger but still well within budget, and avoids the multi-week
+re-download this exact scenario cost this project once already (see
+`.claude/open.md`). Pass `--cleanup` (or set `ERA5_CLEANUP=true`) if
+disk ever does become a constraint: each month's GRIB is then deleted
+after its nc is written, so transient GRIB is at most
+(concurrency x 1.4 GB).

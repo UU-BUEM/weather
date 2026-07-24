@@ -29,6 +29,7 @@ import argparse
 import logging
 
 from weather.providers.merra2.pipeline import run_pipeline
+from weather.settings import EnvSettings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,7 +52,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--ncores", type=int, default=None, metavar="N")
     p.add_argument("--skip-download", action="store_true")
     p.add_argument("--resume", action="store_true")
-    p.add_argument("--cleanup", action="store_true")
+    p.add_argument(
+        "--cleanup", action="store_true",
+        default=EnvSettings.merra2_cleanup(),
+        help="Delete daily files after export (default: keep, via MERRA_CLEANUP)",
+    )
     return p.parse_args()
 
 

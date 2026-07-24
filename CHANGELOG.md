@@ -9,6 +9,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-07-24
+
+### Added
+
+- **MERRA-2: percentile support** —
+  `src/weather/providers/merra2/percentile_index.py`, a structural port
+  of COSMO/ERA5-Land's KS-distance P10/P50/P90 representative-year
+  script.
+- **MERRA-2: point-wise DNI/DHI** —
+  `src/weather/providers/merra2/dni_pointwise.py`, mirroring
+  ERA5-Land's opt-in pvlib DIRINT/DISC decomposition helper (MERRA-2
+  only stores GHI in bulk, same as ERA5-Land).
+- **`src/weather/geo/`**: new standalone country bbox + NetCDF cropping
+  package — `countries.py` (`COUNTRIES` dict, trimmed port of the
+  downstream `merra2-energy-pipeline` repo's `countries.py`, ~30
+  European countries, no timezones/multilingual aliases), `bbox.py`
+  (`BBox([N,W,S,E])` with `.to_area_list()` / `.to_cdo_lonlatbox()`
+  converters), `crop.py` (real `cdo sellonlatbox` subprocess cropping,
+  atomic tmp-file + rename). CLI: `weather geo {crop,list}`. Works
+  today for ERA5-Land/MERRA-2 output NetCDFs; COSMO-REA6 cannot be
+  cropped yet (no lat/lon in its production export — see
+  `.claude/open.md`). Not wired into any provider's `pipeline.py` by
+  design (standalone post-processing step).
+- **`common/solar_position.py`**: `spencer_zenith`, shared Spencer
+  solar-position formula used by ERA5-Land and MERRA-2 (COSMO keeps its
+  own dask-chunked inline version — see `compute_dni`'s docstring for
+  why).
+- **`common/derived_attributes.py`**: shared pure formulas
+  (`wind_speed`, `magnus_rh`, `bolton_rh`, `ghi_from_diffuse_direct`,
+  `dni_from_direct`) now single-sourced and imported by every
+  provider's own `transform.py`, closing a drift risk where each
+  provider used to hand-duplicate this math independently. Also added
+  `DNI_ELEVATION_THRESHOLD_DEG` (5 deg elevation, replacing the
+  hardcoded `_COS_GUARD` cos(zenith) literal) and an upper cos(zenith)
+  bound (`_COS_ZENITH_UPPER = 1.0`) to correct float32 rounding that
+  could otherwise push a Spencer-formula cos(zenith) fractionally above
+  1.0.
+- **`providers/cosmo_rea6/downloaded_attributes.py`**: `RELHUM_2M`
+  (relative humidity) wired end-to-end via `role`/`canonical_name`
+  fields.
+- **`providers/merra2/downloaded_attributes.py`**: `PRECSNOLAND`
+  (snowfall) and `SNODP` (snow depth) from the `lnd` collection, now
+  appearing in the live-regenerated 2018 data.
+- **`tests/compare_providers.py`**: point-wise (DNI/DHI/GHI/T/RH/SF/
+  ALBEDO) and whole-Europe domain-stats comparison across all three
+  providers' 2018 outputs; xlsx (one sheet/provider) + csv/parquet +
+  matplotlib report. Includes a COSMO-only `dni_method_comparison()`
+  cross-checking its native exact DNI/DHI against pvlib's exact closure
+  formula (NREL SPA zenith) and, for reference, pvlib DIRINT.
+- **`tests/verify_merra2_months.py`**: live verification for a full
+  year of MERRA-2 output (hour counts, `HH:30` span, cross-month
+  continuity, NaN/min-max plausibility).
+- **`tests/test_geo_countries.py`**: unit tests for `weather.geo`.
+- **Docs**: `docs/BULK_RUN_GUIDE_MERRA2.md`,
+  `docs/provider_differences.md` (quantified cross-provider RH/albedo/
+  snowfall differences and their physical explanations).
+- **`scripts/run_merra2_bulk.sh`**: launch script for a full MERRA-2
+  bulk run.
+- **`.env.example`**: added `COSMO_CLEANUP`/`ERA5_CLEANUP`/
+  `MERRA_CLEANUP` and `*_FROM_YEAR`/`*_TO_YEAR` for all three providers
+  — single centralized default per knob, resolved by every
+  `run_pipeline()`/`multi_year.py` CLI flag rather than hardcoded per
+  entrypoint.
+- **`infrastructure/env/weather_env.yml`**: added `openpyxl`
+  (`tests/compare_providers.py` xlsx export) and `cdo`
+  (`weather.geo.crop` / `weather geo crop`).
+- **`pyproject.toml`**: added `excel = ["openpyxl>=3.1"]` extra.
+
+### Changed
+
+- **`providers/cosmo_rea6/transform.py`**: `compute_dni` now imports
+  `DNI_ELEVATION_THRESHOLD_DEG` from `derived_attributes.py` instead of
+  a separate hardcoded literal; GHI now clips each component (diffuse,
+  direct) before summing instead of clipping only the final sum.
+- **`providers/cosmo_rea6/export.py`**: minor cleanup alongside the
+  `RELHUM_2M` wiring.
+- **`providers/era5_land/transform.py`**: RH/wind-speed math now calls
+  the shared `magnus_rh`/`wind_speed` formulas instead of its own
+  duplicated copies.
+- **`providers/era5_land/dni_pointwise.py`** and
+  **`providers/merra2/dni_pointwise.py`**: fixed a real cross-provider
+  bug via a shared `_align_pressure()` helper — a tz-naive/tz-aware
+  pressure index mismatch on `.reindex()` was silently producing
+  all-NaN pressure -> all-NaN airmass -> DNI always exactly 0, with no
+  exception raised.
+- **`providers/merra2/downloader.py`**, **`export.py`**,
+  **`pipeline.py`**, **`transform.py`**: adjusted for the `lnd`
+  collection (`PRECSNOLAND`/`SNODP`) and stale raw GES DISC global
+  attrs no longer leaking through `xr.merge`.
+- **`providers/merra2/__init__.py`**: updated for the percentile/
+  dni_pointwise additions.
+- **`settings.py`**: added the `*_CLEANUP`/`*_FROM_YEAR`/`*_TO_YEAR`
+  accessors backing the new `.env.example` knobs.
+- **`CLAUDE.md`** and **`.claude/`**: updated task list, per-provider
+  context/plan docs, and `open.md` to reflect MERRA-2
+  percentile/dni_pointwise and `geo/` as done.
+- **`docs/dni_methodology.md`**: expanded with the upper cos(zenith)
+  bound fix (sec 5.2) and the pvlib exact-closure / DIRINT comparison
+  methodology (sec 11).
+
+### Fixed
+
+- Multi-month `ProcessPoolExecutor` export deadlock in MERRA-2
+  (`export.py` now computes each variable before `to_netcdf()`,
+  matching ERA5-Land, avoiding dask threaded-write lock contention).
+- Stale raw GES DISC global attributes leaking through `xr.merge` in
+  MERRA-2 `transform.py`.
+
+---
+
 ## [1.4.0] - 2026-07-21
 
 ### Added
@@ -129,6 +239,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`providers/era5_land/sample_call.py`**: removed a module-level
   `client.check_authentication()` network call and hardcoded local
   Windows paths (`D:/test/...`) from download targets.
+- **`providers/{cosmo_rea6,era5_land}/percentile_index.py`**: mypy
+  `attr-defined`/type-conflict errors on the optional numba `prange`
+  import — a dead fallback reassignment (`prange = range` in the
+  `except` branch) conflicted with numba's real `prange` type when
+  numba is installed; removed it and silenced the remaining call site
+  with a targeted `# type: ignore[attr-defined]` (numba's stub doesn't
+  type `prange` as iterable), verified locally against the same numba
+  version CI installs.
 
 ---
 

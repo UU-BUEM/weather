@@ -33,10 +33,27 @@ To override for a single run without touching ``.env``::
     COSMO_YEAR         # four-digit year to process
     COSMO_BASE_URL     # DWD OpenData HTTPS base URL
     COSMO_NCORES       # parallel worker count
+    COSMO_CLEANUP      # delete intermediates after export (default false)
+    COSMO_FROM_YEAR    # multi-year run start (default 1995)
+    COSMO_TO_YEAR      # multi-year run end, inclusive (default 2018)
     MERRA_WORK_DIR     # MERRA-2 working directory
     MERRA_YEAR         # MERRA-2 year
+    MERRA_CLEANUP      # delete daily files after export (default false)
+    MERRA_FROM_YEAR    # multi-year run start (default 1980)
+    MERRA_TO_YEAR      # multi-year run end, inclusive (default 2025)
     ERA5_WORK_DIR      # ERA5-Land working directory
     ERA5_YEAR          # ERA5-Land year
+    ERA5_CLEANUP       # delete GRIB after export (default false)
+    ERA5_FROM_YEAR     # multi-year run start (default 1940)
+    ERA5_TO_YEAR       # multi-year run end, inclusive (default 2025)
+
+Every provider's own ``--cleanup``/``--no-cleanup`` CLI flag (in
+``tests/test_<provider>_one_month/one_year/multi_year.py``) defaults
+from exactly one of the ``*_CLEANUP`` settings, and every
+``test_<provider>_multi_year.py``'s ``--from-year``/``--to-year``
+defaults from the matching ``*_FROM_YEAR``/``*_TO_YEAR`` pair -- change
+the env var once and every runner picks it up; the CLI flag still
+overrides it per-invocation.
 """
 
 from __future__ import annotations
@@ -48,6 +65,17 @@ from .common.env import data_root, load_repo_env
 
 # Load .env exactly once at import time.
 load_repo_env()
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Parse a boolean environment variable (``1/true/yes/on``, case-insensitive).
+
+    Anything else (including unset) falls back to *default*.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 class EnvSettings:
@@ -107,6 +135,24 @@ class EnvSettings:
         return int(os.getenv("COSMO_YEAR", "2018"))
 
     @staticmethod
+    def cosmo_from_year() -> int:
+        """Multi-year run start (COSMO_FROM_YEAR, default 1995).
+
+        Single source of truth for ``test_cosmo_multi_year.py``'s
+        ``--from-year`` default -- change the env var once instead of
+        the script's argparse default.
+        """
+        return int(os.getenv("COSMO_FROM_YEAR", "1995"))
+
+    @staticmethod
+    def cosmo_to_year() -> int:
+        """Multi-year run end, inclusive (COSMO_TO_YEAR, default 2018).
+
+        See :meth:`cosmo_from_year`.
+        """
+        return int(os.getenv("COSMO_TO_YEAR", "2018"))
+
+    @staticmethod
     def cosmo_base_url() -> str:
         """DWD OpenData HTTPS base URL (COSMO_BASE_URL)."""
         return os.getenv(
@@ -157,6 +203,20 @@ class EnvSettings:
     def cosmo_conda_env() -> str:
         """Conda environment name for scripts (COSMO_CONDA_ENV)."""
         return os.getenv("COSMO_CONDA_ENV", "weather_env")
+
+    @staticmethod
+    def cosmo_cleanup() -> bool:
+        """Delete intermediate .bz2/.grb files after export (COSMO_CLEANUP).
+
+        Default ``False`` (keep everything) -- single source of truth for
+        every COSMO entrypoint's cleanup default (``pipeline.py``'s
+        ``run_pipeline()`` and the ``test_cosmo_one_month/one_year/
+        multi_year.py`` runners' ``--no-cleanup`` flag). Set
+        ``COSMO_CLEANUP=true`` in ``.env`` to delete by default instead;
+        each runner's own ``--cleanup``/``--no-cleanup`` CLI flag still
+        overrides this per-invocation.
+        """
+        return _env_bool("COSMO_CLEANUP", False)
 
     @staticmethod
     def cosmo_log_dir() -> Path:
@@ -215,6 +275,25 @@ class EnvSettings:
         return int(os.getenv("MERRA_YEAR", "2018"))
 
     @staticmethod
+    def merra2_from_year() -> int:
+        """Multi-year run start (MERRA_FROM_YEAR, default 1980).
+
+        Single source of truth for ``test_merra2_multi_year.py``'s
+        ``--from-year`` default -- change the env var once instead of
+        the script's argparse default. Note the ``MERRA_`` (not
+        ``MERRA2_``) prefix, matching ``MERRA_WORK_DIR``/``MERRA_YEAR``.
+        """
+        return int(os.getenv("MERRA_FROM_YEAR", "1980"))
+
+    @staticmethod
+    def merra2_to_year() -> int:
+        """Multi-year run end, inclusive (MERRA_TO_YEAR, default 2025).
+
+        See :meth:`merra2_from_year`.
+        """
+        return int(os.getenv("MERRA_TO_YEAR", "2025"))
+
+    @staticmethod
     def merra2_ncores() -> int:
         """Parallel worker count (MERRA_NCORES or SLURM_CPUS_PER_TASK)."""
         return int(
@@ -236,6 +315,20 @@ class EnvSettings:
     def merra2_conda_env() -> str:
         """Conda environment name (MERRA_CONDA_ENV)."""
         return os.getenv("MERRA_CONDA_ENV", "weather_env")
+
+    @staticmethod
+    def merra2_cleanup() -> bool:
+        """Delete downloaded daily files after export (MERRA_CLEANUP).
+
+        Default ``False`` (keep everything) -- single source of truth for
+        every MERRA-2 entrypoint's cleanup default (``pipeline.py``'s
+        ``run_pipeline()`` and the ``test_merra2_one_month/one_year/
+        multi_year.py`` runners' ``--cleanup`` flag). Set
+        ``MERRA_CLEANUP=true`` in ``.env`` to delete by default instead;
+        each runner's own ``--cleanup`` CLI flag still overrides this
+        per-invocation.
+        """
+        return _env_bool("MERRA_CLEANUP", False)
 
     @staticmethod
     def merra2_slurm_partition() -> str:
@@ -314,6 +407,24 @@ class EnvSettings:
         return int(os.getenv("ERA5_YEAR", "2018"))
 
     @staticmethod
+    def era5_from_year() -> int:
+        """Multi-year run start (ERA5_FROM_YEAR, default 1940).
+
+        Single source of truth for ``test_era5_multi_year.py``'s
+        ``--from-year`` default -- change the env var once instead of
+        the script's argparse default.
+        """
+        return int(os.getenv("ERA5_FROM_YEAR", "1940"))
+
+    @staticmethod
+    def era5_to_year() -> int:
+        """Multi-year run end, inclusive (ERA5_TO_YEAR, default 2025).
+
+        See :meth:`era5_from_year`.
+        """
+        return int(os.getenv("ERA5_TO_YEAR", "2025"))
+
+    @staticmethod
     def era5_ncores() -> int:
         """Parallel worker count (ERA5_NCORES or SLURM_CPUS_PER_TASK)."""
         return int(
@@ -335,6 +446,20 @@ class EnvSettings:
     def era5_conda_env() -> str:
         """Conda environment name (ERA5_CONDA_ENV)."""
         return os.getenv("ERA5_CONDA_ENV", "weather_env")
+
+    @staticmethod
+    def era5_cleanup() -> bool:
+        """Delete the downloaded GRIB after export (ERA5_CLEANUP).
+
+        Default ``False`` (keep everything) -- single source of truth for
+        every ERA5-Land entrypoint's cleanup default (``pipeline.py``'s
+        ``run_pipeline()`` and the ``test_era5_one_month/one_year/
+        multi_year.py`` runners' ``--cleanup`` flag). Set
+        ``ERA5_CLEANUP=true`` in ``.env`` to delete by default instead;
+        each runner's own ``--cleanup`` CLI flag still overrides this
+        per-invocation.
+        """
+        return _env_bool("ERA5_CLEANUP", False)
 
     @staticmethod
     def era5_cds_dataset() -> str:

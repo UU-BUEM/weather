@@ -14,11 +14,24 @@ Confidence: HIGH (from actual source). Reference provider the others follow.
 H_SNOW(m), PS(Pa), RELHUM_2M(%), SNOW_CON(kg/m²), SNOW_GSP(kg/m²),
 SWDIFDS_RAD(W/m², diffuse, instant), SWDIRS_RAD(W/m², direct, instant),
 T_2M(K→°C), U_10M, V_10M(m/s). Keys: dwd_name, description, unit_raw,
-unit_target, conversion.
+unit_target, conversion, **role** (`"formula"` vs `"passthrough"` —
+single source of truth for which attrs need hand-written derivation
+code vs generic assembly), **canonical_name** (output var name when it
+differs from the key, e.g. RELHUM_2M → RH). `_ALL_ATTRS` in
+`test_cosmo_one_month.py` derives from `ATTRIBUTES.keys()` — was a
+hand-duplicated list that silently dropped RELHUM_2M until fixed (see
+`.claude/open.md`). `transform.build_month_dataset()` is now the one
+shared assembly function both one-month/one-year runners call —
+formerly two independent hand-duplicated copies.
 
 ## Key contrasts (do NOT unify)
-- **RH DIRECT** (RELHUM_2M, %). COSMO does NOT compute RH. (ERA5 dew-point
-  Magnus; MERRA-2 q-based.)
+- **RH DIRECT** (RELHUM_2M, %). COSMO does NOT compute RH — it's a raw
+  model field, passed through as-is (unlike ERA5 dew-point Magnus or
+  MERRA-2 q-based). Wired end-to-end in code as of this session, but the
+  2018 data on disk predates the fix — needs a re-run to actually appear.
+- **No albedo attribute exists for COSMO** — not in DWD's published
+  COSMO-REA6 2D variable catalog at all (checked). ERA5-Land (`fal`) and
+  MERRA-2 (`ALBEDO`) both have it.
 - **Radiation split at source:** SWDIFDS(diffuse)+SWDIRS(direct), both
   instant. `derived_attributes` builds GHI/DHI/DNI: DHI=SWDIFDS,
   DNI=SWDIRS/cos(zenith) (horizon-divergent → COSMO needs Spencer-SZA

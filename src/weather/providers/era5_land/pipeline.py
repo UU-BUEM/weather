@@ -131,7 +131,7 @@ def run_pipeline(
     complevel: int = 1,
     skip_download: bool = False,
     resume: bool = False,
-    cleanup: bool = False,
+    cleanup: bool | None = None,
 ) -> list[Path]:
     """Execute the ERA5-Land pipeline for *year*.
 
@@ -154,8 +154,10 @@ def run_pipeline(
         Assume monthly GRIBs already present in ``download_dir``.
     resume : bool
         Skip months whose output ``.nc`` already exists.
-    cleanup : bool
+    cleanup : bool, optional
         Remove the downloaded GRIB(s) after successful export.
+        Default: ``config["cleanup"]`` (``ERA5_CLEANUP`` env var,
+        itself defaulting to ``False`` -- keep everything).
 
     Returns
     -------
@@ -169,6 +171,7 @@ def run_pipeline(
     year = year or cfg["year"]
     months = months or list(range(1, 13))
     ncores = ncores or cfg["ncores"]
+    cleanup = cfg["cleanup"] if cleanup is None else cleanup
 
     t0 = time.perf_counter()
     logger.info("=" * 60)

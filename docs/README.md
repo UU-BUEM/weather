@@ -15,6 +15,11 @@ All files are Markdown; linting rules are in `/.markdownlint.json`
 | [parallelization.md](parallelization.md) | Architecture of the parallel pipeline, memory/disk footprint, tuning guide |
 | [percentile_methodology.md](percentile_methodology.md) | Mathematical description of the P10/P50/P90 representative-year algorithm |
 | [dni_methodology.md](dni_methodology.md) | Spencer formula, pvlib DIRINT, irradiance decomposition rationale |
+| [provider_differences.md](provider_differences.md) | Quantified attribute-level differences (RH, snowfall, albedo, snow depth, GHI/DHI/DNI methodology, wind, temperature/pressure, timestamps, grid) between COSMO-REA6, ERA5-Land, MERRA-2 |
+| [MERRA2_PIPELINE_GUIDE.md](MERRA2_PIPELINE_GUIDE.md) | MERRA-2 collections/attributes, OPeNDAP auth, timestamp convention, derived fields, running the pipeline |
+| [BULK_RUN_GUIDE_ERA5-LAND.md](BULK_RUN_GUIDE_ERA5-LAND.md) | ERA5-Land bulk multi-year run: bottleneck analysis, `scripts/run_era5_bulk.sh`, parallelization, disk budget |
+| [BULK_RUN_GUIDE_MERRA2.md](BULK_RUN_GUIDE_MERRA2.md) | MERRA-2 bulk multi-year run: bottleneck analysis, `scripts/run_merra2_bulk.sh`, parallelization, disk budget |
+| [DOWNLOAD_AND_LOGGING.md](DOWNLOAD_AND_LOGGING.md) | ERA5-Land: parallel-range-request download speedup, server logging setup |
 | [git-push-workflow.md](git-push-workflow.md) | Branch and push conventions for contributors |
 
 ---

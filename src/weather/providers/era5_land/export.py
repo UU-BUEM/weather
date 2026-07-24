@@ -73,7 +73,7 @@ def export_netcdf(
     ds : xarray.Dataset
         Processed monthly ERA5-Land dataset (with derived ``GHI``).
     year, month : int
-        Used for the default filename and skip-if-exists check.
+        Used for the default filename.
     output_dir : Path, optional
         Directory for the output file.  Defaults to
         ``config["output_dir"]``.  Ignored if *output_path* is given.
@@ -91,10 +91,6 @@ def export_netcdf(
         if output_dir is None:
             output_dir = get_config()["output_dir"]
         output_path = Path(output_dir) / output_filename(year, month)
-
-    if output_path.exists() and output_path.stat().st_size > 0:
-        logger.info("NetCDF already exists, skipping: %s", output_path)
-        return output_path
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 

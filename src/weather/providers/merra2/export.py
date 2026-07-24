@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -71,7 +72,7 @@ def export_netcdf(
     ds : xarray.Dataset
         Processed monthly MERRA-2 dataset (with derived ``GHI``).
     year, month : int
-        Used for the default filename and skip-if-exists check.
+        Used for the default filename.
     output_dir : Path, optional
         Directory for the output file.  Defaults to
         ``config["output_dir"]``.  Ignored if *output_path* is given.
@@ -90,21 +91,38 @@ def export_netcdf(
             output_dir = get_config()["output_dir"]
         output_path = Path(output_dir) / output_filename(year, month)
 
-    if output_path.exists() and output_path.stat().st_size > 0:
-        logger.info("NetCDF already exists, skipping: %s", output_path)
-        return output_path
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Materialise dask arrays one variable at a time before to_netcdf().
+    # build_monthly_dataset() is backed by xr.open_mfdataset (lazy/dask),
+    # and calling to_netcdf() directly on a lazy dataset hands the write
+    # to dask's default *threaded* scheduler, spawning one thread per
+    # core to write a *single* netCDF4/HDF5 file. Those threads all
+    # serialize on xarray's netCDF4 write lock, and with many threads +
+    # multiple sibling worker PROCESSES (one per month, from pipeline.py's
+    # ProcessPoolExecutor) also writing concurrently, this deadlocked in
+    # practice (observed via py-spy: every dask worker thread stuck at
+    # xarray.backends.locks.CombinedLock.__enter__, no progress for 30+
+    # minutes) — same fix ERA5-Land's exporter already uses.
+    t0 = time.perf_counter()
+    logger.info("Computing dask arrays (variable-by-variable)...")
+    for var_name in list(ds.data_vars):
+        if hasattr(ds[var_name].data, "dask"):
+            logger.info("  Computing %s ...", var_name)
+            ds[var_name] = ds[var_name].compute()
+    logger.info("  Computed in %.1f s", time.perf_counter() - t0)
 
     encoding = _build_encoding(ds, complevel=complevel)
     logger.info("Writing NetCDF: %s (complevel=%d)", output_path, complevel)
 
+    t1 = time.perf_counter()
     ds.to_netcdf(
         output_path,
         encoding=encoding,
         format="NETCDF4",
         engine="netcdf4",
     )
+    logger.info("  Write done in %.1f s", time.perf_counter() - t1)
 
     size_mb = output_path.stat().st_size / (1024 * 1024)
     logger.info("NetCDF written: %s (%.1f MB)", output_path.name, size_mb)

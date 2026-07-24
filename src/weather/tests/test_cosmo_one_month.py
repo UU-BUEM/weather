@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """End-to-end pipeline test: download, decompress, and process one month of
-COSMO-REA6 data, exercising all 9 available attributes.
+COSMO-REA6 data, exercising every attribute registered in
+``downloaded_attributes.ATTRIBUTES`` (currently 10; see that module --
+adding/removing an entry there changes what this script does, no edit
+needed here).
 
-Downloads all nine COSMO-REA6 raw attributes in parallel, decompresses them
-with a pipeline that overlaps download and decompression (producer-consumer
-pattern), then computes all derived variables and writes a single NetCDF file.
+Downloads all raw attributes in parallel, decompresses them with a pipeline
+that overlaps download and decompression (producer-consumer pattern), then
+calls :func:`weather.providers.cosmo_rea6.transform.build_month_dataset` to
+compute all derived variables and writes a single NetCDF file.
 
-Derived variables written to the output NetCDF
------------------------------------------------
-  T         — 2-m air temperature (°C)
-  GHI       — Global Horizontal Irradiance (W/m²)
-  DHI       — Diffuse Horizontal Irradiance (W/m²)
-  WS_10M    — Wind speed at 10 m (m/s)
-  DNI       — Direct Normal Irradiance [experimental] (W/m²)
-  PS        — Surface pressure (Pa)
-  H_SNOW    — Snow depth (m)
-  SNOW_GSP  — Stratiform snow (kg/m²)
-  SNOW_CON  — Convective snow (kg/m²)
+Output variables (see ``downloaded_attributes.py`` for the current list)
+--------------------------------------------------------------------------
+  T, GHI, DHI, WS_10M   — formula-derived (see transform.py)
+  DNI                   — Direct Normal Irradiance [experimental] (W/m²)
+  everything else       — passed through generically from its own
+                           registered unit_target/description (currently:
+                           PS, H_SNOW, SNOW_GSP, SNOW_CON, RH)
 
 Usage
 -----
@@ -58,25 +58,26 @@ Pipeline flow
 
     test_cosmo_one_month.py
       │
-      ├── Phase 1 — Download (ThreadPoolExecutor, 9 × 1 = 9 parallel tasks)
-      │     For each of the 9 COSMO-REA6 attributes:
+      ├── Phase 1 — Download (ThreadPoolExecutor, one task per attribute)
+      │     For each attribute in downloaded_attributes.ATTRIBUTES:
       │       HTTP GET  →  download/<attr>/<attr>.2D.<YYYYMM>.grb.bz2
       │       (skip if bz2 already present and valid)
       │
       ├── Phase 2 — Decompress (ProcessPoolExecutor, up to ncores workers)
-      │     For each of the 9 bz2 files:
+      │     For each downloaded bz2 file:
       │       lbzip2 / pbzip2 / python-bz2  →  decompress/<attr>/….grb
       │       (skip if GRIB already present and valid)
       │
       └── Phase 3 — Transform + Export (single month)
-            cfgrib.open_datasets(<all 9 GRIBs>)
-              →  apply_derived_fields: GHI, DHI, DNI, T, WS_10M …
+            transform.build_month_dataset(year, month)
+              →  formula-derived: GHI, DHI, DNI, T, WS_10M
+              →  generic passthrough: everything else registered
               →  export.to_netcdf (zlib, complevel=1, float32)
               →  <work_dir>/output/COSMO_REA6_<YYYY>_<MM>_all_attrs.nc
               →  cleanup: delete GRIB files
 
-Output: 1 × COSMO_REA6_<YYYY>_<MM>_all_attrs.nc  (shape: 8760×824×848 or
-        similar; 9 derived variables + static coords lat/lon)
+Output: 1 × COSMO_REA6_<YYYY>_<MM>_all_attrs.nc (shape ~8760×824×848;
+        one variable per downloaded_attributes.py entry + static coords)
 """
 
 from __future__ import annotations
@@ -94,16 +95,18 @@ from concurrent.futures import (
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+# Every COSMO-REA6 attribute registered in downloaded_attributes.py --
+# single source of truth. Adding/removing an entry there (and, for a
+# role="passthrough" attribute, nothing else) changes what this script
+# downloads/transforms/exports on its next run; no separate list to
+# keep in sync here.
+from weather.providers.cosmo_rea6.downloaded_attributes import (
+    ATTRIBUTES as _ATTRIBUTES,
+)
+from weather.settings import EnvSettings
+
 if TYPE_CHECKING:
     import xarray
-
-# ---------------------------------------------------------------------------
-# Path bootstrap — allows running without a prior `pip install -e .`
-# ---------------------------------------------------------------------------
-_here = Path(__file__).resolve().parent   # src/weather/tests/
-_src = _here.parent.parent               # src/
-if (_src / "weather").is_dir() and str(_src) not in sys.path:
-    sys.path.insert(0, str(_src))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -112,18 +115,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("cr6_test")
 
-# All nine COSMO-REA6 attributes (order preserved in logs)
-_ALL_ATTRS: list[str] = [
-    "PS",
-    "SWDIFDS_RAD",
-    "SWDIRS_RAD",
-    "T_2M",
-    "U_10M",
-    "V_10M",
-    "H_SNOW",
-    "SNOW_GSP",
-    "SNOW_CON",
-]
+_ALL_ATTRS: list[str] = list(_ATTRIBUTES.keys())
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +125,7 @@ _ALL_ATTRS: list[str] = [
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="End-to-end 1-month COSMO-REA6 pipeline test"
-        " (all 9 attributes)",
+        f" (all {len(_ALL_ATTRS)} registered attributes)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--year",  type=int, default=2018, help="Four-digit year")
@@ -163,10 +155,13 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--no-cleanup", action="store_true",
+        default=not EnvSettings.cosmo_cleanup(),
         help="Keep intermediate files (downloads, decompressed GRIBs, "
-             "cfgrib index files).  By default, .grb.bz2 files are removed "
-             "after decompression and .grb/.idx files are removed after "
-             "the NetCDF is written.",
+             "cfgrib index files).  Default: keep them (COSMO_CLEANUP=false, "
+             "the default) unless COSMO_CLEANUP=true in .env, in which case "
+             ".grb.bz2 files are removed after decompression and .grb/.idx "
+             "files are removed after the NetCDF is written, and this flag "
+             "is needed to opt back into keeping them.",
     )
     args = p.parse_args()
     if not 1 <= args.month <= 12:
@@ -487,16 +482,7 @@ def main() -> None:
     from weather.providers.cosmo_rea6.download import download_attribute_month
     from weather.providers.cosmo_rea6.export import export_netcdf
     from weather.providers.cosmo_rea6.naming import grib_filename
-    from weather.providers.cosmo_rea6.transform import (
-        _resolve_var,
-        _strip_scalar_coords,
-        compute_dhi,
-        compute_dni,
-        compute_ghi,
-        compute_wind_speed,
-        convert_temperature,
-        open_grib_month,
-    )
+    from weather.providers.cosmo_rea6.transform import build_month_dataset
 
     # CLI overrides — applied after imports so they win over .env values.
     if args.work_dir:
@@ -505,7 +491,7 @@ def main() -> None:
         os.environ["COSMO_NCORES"] = str(args.ncores)
 
     try:
-        import xarray as xr
+        import xarray  # noqa: F401 -- fail fast with a clear message below
     except ImportError:
         sys.exit(
             "xarray is not installed. "
@@ -561,7 +547,10 @@ def main() -> None:
     logger.info("Log file: %s", _log_path)
 
     logger.info("=" * 68)
-    logger.info("COSMO-REA6 One-Month Pipeline Test — all 9 attributes")
+    logger.info(
+        "COSMO-REA6 One-Month Pipeline Test — all %d registered attributes",
+        len(_ALL_ATTRS),
+    )
     logger.info("  Year       : %d", year)
     logger.info("  Month      : %02d", month)
     logger.info("  Attributes : %s", ", ".join(_ALL_ATTRS))
@@ -671,75 +660,32 @@ def main() -> None:
             cleanup_locks=False,
         )
 
-    # ── Step 2: Open GRIB files ───────────────────────────────────────────
+    # ── Step 2+3: Open GRIBs + Transform ──────────────────────────────────
+    # build_month_dataset() is the single shared assembly function (also
+    # used by test_cosmo_one_year.py) -- it opens every attribute in
+    # downloaded_attributes.ATTRIBUTES, applies the T/GHI/DHI/WS_10M
+    # formulas, and generically passes through everything else (PS,
+    # H_SNOW, SNOW_GSP, SNOW_CON, and now RH) using each attribute's own
+    # registered unit_target/description. See transform.py docstring.
     t0 = time.perf_counter()
-    logger.info("STEP 2/4: Opening %d GRIB files ...", len(_ALL_ATTRS))
-    datasets = {}
-    for attr in _ALL_ATTRS:
-        datasets[attr] = open_grib_month(attr, year, month)
-    logger.info("  Step 2 time: %.1f s", time.perf_counter() - t0)
-
-    # ── Step 3: Transform ────────────────────────────────────────────────
-    t0 = time.perf_counter()
-    logger.info("STEP 3/4: Transforming ...")
-
-    T = _strip_scalar_coords(convert_temperature(datasets["T_2M"]))
-    GHI = _strip_scalar_coords(
-        compute_ghi(datasets["SWDIFDS_RAD"], datasets["SWDIRS_RAD"])
+    logger.info(
+        "STEP 2-3/4: Opening %d GRIB files + transforming ...",
+        len(_ALL_ATTRS),
     )
-    DHI = _strip_scalar_coords(compute_dhi(datasets["SWDIFDS_RAD"]))
-    WS = _strip_scalar_coords(
-        compute_wind_speed(datasets["U_10M"], datasets["V_10M"])
+    ds_out, datasets = build_month_dataset(
+        year, month, compute_dni_field=not args.skip_dni,
     )
-
-    # Pass-through: rename to canonical names and add minimal attrs
-    PS = _strip_scalar_coords(_resolve_var(datasets["PS"], "PS")).rename("PS")
-    PS.attrs.update({"units": "Pa", "long_name": "Surface pressure"})
-
-    HSNOW = (
-        _strip_scalar_coords(_resolve_var(datasets["H_SNOW"], "H_SNOW"))
-        .rename("H_SNOW")
-    )
-    HSNOW.attrs.update({"units": "m", "long_name": "Snow depth"})
-
-    SGSP = (
-        _strip_scalar_coords(_resolve_var(datasets["SNOW_GSP"], "SNOW_GSP"))
-        .rename("SNOW_GSP")
-    )
-    SGSP.attrs.update({"units": "kg/m2", "long_name": "Stratiform snow"})
-
-    SCON = (
-        _strip_scalar_coords(_resolve_var(datasets["SNOW_CON"], "SNOW_CON"))
-        .rename("SNOW_CON")
-    )
-    SCON.attrs.update({"units": "kg/m2", "long_name": "Convective snow"})
-
-    data_vars: dict = {
-        "T":        T,
-        "GHI":      GHI,
-        "DHI":      DHI,
-        "WS_10M":   WS,
-        "PS":       PS,
-        "H_SNOW":   HSNOW,
-        "SNOW_GSP": SGSP,
-        "SNOW_CON": SCON,
-    }
-
     if not args.skip_dni:
-        logger.info("  Computing per-cell DNI (experimental) ...")
-        DNI = _strip_scalar_coords(compute_dni(datasets["SWDIRS_RAD"]))
-        data_vars["DNI"] = DNI
+        DNI = ds_out["DNI"]
         logger.info(
             "  DNI range: [%.1f, %.1f] W/m² (zero = sun below 5° threshold)",
             float(DNI.min()), float(DNI.max()),
         )
         _log_dni_stats(DNI, datasets["SWDIRS_RAD"])
 
-    ds_out = xr.Dataset(data_vars)
-
     shapes = {k: list(v.shape) for k, v in ds_out.data_vars.items()}
     logger.info("  Variable shapes: %s", shapes)
-    logger.info("  Step 3 time: %.1f s", time.perf_counter() - t0)
+    logger.info("  Step 2-3 time: %.1f s", time.perf_counter() - t0)
 
     # ── Step 4: Export NetCDF ─────────────────────────────────────────────
     t0 = time.perf_counter()

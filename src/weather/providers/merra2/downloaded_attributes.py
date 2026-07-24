@@ -18,18 +18,14 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 # GES DISC collections used by this pipeline
 # ---------------------------------------------------------------------------
-# Only 2 collections are needed for the 9 attributes below.  MERRA-2 also
-# has a M2T1NXLND (land diagnostics) collection with SNODP/PRECSNOLAND
-# (snow depth / snowfall), but those are intentionally NOT downloaded in
-# this phase: adding a 3rd collection has real cost (one more OPeNDAP
-# request per day), while M2T1NXRAD's ALBEDO variable is available for
-# free within the RAD request already being made for SWGDN and is more
-# immediately useful for solar-PV work downstream. Future extension: add
-# "lnd": "M2T1NXLND.5.12.4" here and SNODP/PRECSNOLAND entries below if
-# snow variables become needed.
+# 3 collections, one OPeNDAP request per (collection, day). "lnd" (land
+# diagnostics: SNODP/PRECSNOLAND) added because a confirmed downstream
+# consumer (github.com/THD-Spatial-AI/merra2-energy-pipeline,
+# src/data_pipeline/config.py) needs both for its PV snow-loss model.
 COLLECTIONS: dict[str, str] = {
     "rad": "M2T1NXRAD.5.12.4",
     "slv": "M2T1NXSLV.5.12.4",
+    "lnd": "M2T1NXLND.5.12.4",
 }
 
 # ---------------------------------------------------------------------------
@@ -148,6 +144,54 @@ ATTRIBUTES: dict[str, dict[str, str]] = {
         "unit_raw": "1",
         "unit_target": "1",
         "conversion": "none (already a dimensionless fraction 0-1)",
+    },
+    "U50M": {
+        "m2_name": "U50M",
+        "collection": "slv",
+        "description": (
+            "50-meter eastward wind velocity component "
+            "(zonal wind speed; hub-height-relevant for wind power, "
+            "unlike U10M/U2M)"
+        ),
+        "unit_raw": "m/s",
+        "unit_target": "m/s",
+        "conversion": (
+            "none (already in meters per second (m/s))"
+        ),
+    },
+    "V50M": {
+        "m2_name": "V50M",
+        "collection": "slv",
+        "description": (
+            "50-meter northward wind velocity component "
+            "(meridional wind speed; hub-height-relevant for wind power, "
+            "unlike V10M/V2M)"
+        ),
+        "unit_raw": "m/s",
+        "unit_target": "m/s",
+        "conversion": (
+            "none (already in meters per second (m/s))"
+        ),
+    },
+    "SNODP": {
+        "m2_name": "SNODP",
+        "collection": "lnd",
+        "description": "snow depth (within the snow-covered tile fraction only)",
+        "unit_raw": "m",
+        "unit_target": "m",
+        "conversion": "none (already in meters (m))",
+    },
+    "PRECSNOLAND": {
+        "m2_name": "PRECSNOLAND",
+        "collection": "lnd",
+        "description": "snowfall rate over land",
+        "unit_raw": "kg/m^2/s",
+        "unit_target": "kg/m^2/h",
+        "conversion": (
+            "multiply by 3600 "
+            "(converts kg/m^2/s to kg/m^2/h, matching COSMO's "
+            "SNOW_GSP+SNOW_CON and ERA5-Land's sf convention)"
+        ),
     },
 }
 

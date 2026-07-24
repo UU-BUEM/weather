@@ -1,10 +1,13 @@
 # MERRA-2 — engineering context
 
-Confidence: HIGH — implementation complete (download/transform/export/
-pipeline all implemented and wired into the CLI). Not yet run end-to-end
-against real GES DISC data (needs the user's Earthdata credentials on
-the target server); see `docs/MERRA2_PIPELINE_GUIDE.md` for the full
-verification checklist.
+Confidence: HIGH — implementation complete AND verified live. Full 2018
+(12 months, all 3 collections incl. `lnd`) re-run against real GES DISC
+data, checked with `tests/verify_merra2_months.py` (correct hour counts,
+`HH:30` span, no gaps, plausible NaN/min-max on all variables incl.
+`SNODP`/`PRECSNOLAND`/`U50M`/`V50M`). See `docs/MERRA2_PIPELINE_GUIDE.md`
+for the checklist and the `export_netcdf` skip-if-exists bug found and
+fixed during this rerun (also affected COSMO-REA6 and ERA5-Land's
+`export.py` — see `.claude/open.md`).
 
 ## Status
 
@@ -53,12 +56,22 @@ verification checklist.
   ERA5-Land), addressed via `Merra2DownloadJob(collection, year, month,
   day)` — sanctioned by `base_downloader.py`'s own docstring, which
   names MERRA-2 as the provider expected to define its own job type.
-- **2 collections** (not 3): `M2T1NXRAD.5.12.4` (`rad`: `SWGDN`,
-  `ALBEDO`) and `M2T1NXSLV.5.12.4` (`slv`: `T2M`, `QV2M`, `U2M`, `V2M`,
-  `U10M`, `V10M`, `PS`). `SNODP`/`PRECSNOLAND` (which would need a 3rd
-  collection, `M2T1NXLND`) are intentionally NOT downloaded — `ALBEDO`
-  was judged higher-value and comes free within the `rad` request
-  already being made. Documented future extension, not implemented.
+- **3 collections**: `M2T1NXRAD.5.12.4` (`rad`: `SWGDN`, `ALBEDO`),
+  `M2T1NXSLV.5.12.4` (`slv`: `T2M`, `QV2M`, `U2M`, `V2M`, `U10M`,
+  `V10M`, `U50M`, `V50M`, `PS`), and `M2T1NXLND.5.12.4` (`lnd`: `SNODP`,
+  `PRECSNOLAND`). `lnd` added because a confirmed downstream consumer
+  (github.com/THD-Spatial-AI/merra2-energy-pipeline,
+  `src/data_pipeline/config.py`) needs `SNODP`/`PRECSNOLAND` for its PV
+  snow-loss model and `U50M`/`V50M` (hub-height wind) for its wind
+  model — `U50M`/`V50M` came free within the already-fetched `slv`
+  request. `build_monthly_dataset()` now takes `(rad_paths, slv_paths,
+  lnd_paths, *, year, month)` — was `(rad_paths, slv_paths, ...)`, a
+  breaking signature change; the one caller (`pipeline.py`'s
+  `_transform_export_one`) was updated. `PRECSNOLAND` arrives as
+  kg/m^2/s, converted to kg/m^2/h in `_convert_units` to match COSMO's
+  SNOW_GSP+SNOW_CON / ERA5-Land's `sf` convention. Verified against
+  synthetic local NetCDF4 files (not live GES DISC — no download
+  triggered).
 - Host `goldsmr4.gesdisc.eosdis.nasa.gov`. No decompression (NetCDF4
   throughout). Output is **monthly** (`MERRA2_<YYYY>_<MM>_all_attrs.nc`),
   matching ERA5-Land's convention — not annual like COSMO.

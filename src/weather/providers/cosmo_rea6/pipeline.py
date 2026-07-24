@@ -68,7 +68,7 @@ def run_pipeline(
     complevel: int = 1,
     skip_download: bool = False,
     skip_decompress: bool = False,
-    cleanup: bool = False,
+    cleanup: bool | None = None,
 ) -> Path:
     """Execute the full weather processing pipeline.
 
@@ -90,6 +90,10 @@ def run_pipeline(
         Skip downloading (assume ``.grb.bz2`` files already present).
     skip_decompress : bool
         Skip decompression (assume ``.grb`` files already present).
+    cleanup : bool, optional
+        Remove downloaded/decompressed files after export. Default:
+        ``config["cleanup"]`` (``COSMO_CLEANUP`` env var, itself
+        defaulting to ``False`` -- keep everything).
 
     Returns
     -------
@@ -105,6 +109,7 @@ def run_pipeline(
     cfg = get_config()
     year = year or cfg["year"]
     attributes = attributes or cfg["attributes"]
+    cleanup = cfg["cleanup"] if cleanup is None else cleanup
 
     # Allow work_dir override
     if work_dir:

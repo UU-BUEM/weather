@@ -12,16 +12,36 @@ changes (same commit).
    BasePercentileAnalyzer` is dead code, superseded in commit `17d5eea`).
    Still needs a live smoke test AFTER bulk run + boundary repair.
    → `.claude/era5_land/era5_land_percentile_plan.md`
-2. **MERRA-2 end-to-end verification** — code is complete (download via
-   OPeNDAP/Earthdata session, transform, export, pipeline all
-   implemented; see `.claude/merra2/merra2_context.md`), but not yet run
-   against real GES DISC data. Do a single-month smoke test
-   (`test_merra2_one_month.py`) once Earthdata credentials are
-   configured, before a full bulk run. → `.claude/merra2/merra2_plan.md`
-3. **MERRA-2 percentile / dni_pointwise** (optional, lower priority) —
-   same pattern as ERA5-Land's pending percentile task once MERRA-2 is
-   verified live; a point-wise DNI/DHI helper is also a documented,
-   not-yet-built extension. → `.claude/merra2/merra2_plan.md`
+2. **MERRA-2 end-to-end verification** — DONE. Full 2018 (12 months) run
+   against real GES DISC data, verified via `tests/verify_merra2_months.py`
+   (hour counts, `HH:30` span, cross-month continuity, NaN/min-max
+   plausibility). Two real bugs found and fixed along the way: stale
+   raw GES DISC global attrs leaking through `xr.merge` (now cleared in
+   `transform.py`), and a multi-month `ProcessPoolExecutor` export
+   deadlock (dask threaded-write lock contention — `export.py` now
+   computes each variable before `to_netcdf()`, matching ERA5-Land).
+   → `.claude/merra2/merra2_plan.md`
+3. **MERRA-2 percentile / dni_pointwise** — DONE (code).
+   `providers/merra2/percentile_index.py` mirrors ERA5-Land/COSMO's
+   KS-distance approach; `providers/merra2/dni_pointwise.py` mirrors
+   ERA5-Land's point-wise DNI/DHI helper. Both smoke-tested against
+   real 2018 data. Also found + fixed a real cross-provider bug in
+   `dni_pointwise.py` (both providers): a tz-naive/tz-aware pressure
+   index mismatch on `.reindex()` silently produced all-NaN pressure ->
+   all-NaN airmass -> DNI always exactly 0, no exception raised. Fixed
+   in both `era5_land/dni_pointwise.py` and `merra2/dni_pointwise.py`
+   via a shared `_align_pressure()` helper. → `.claude/merra2/merra2_plan.md`
+4. **Country bbox + cropping (`geo/`)** — DONE. New standalone
+   `src/weather/geo/` package: `countries.py` (trimmed port of the
+   downstream `merra2-energy-pipeline` repo's `countries.py` — bbox dict
+   only, no timezones, no multilingual aliases), `bbox.py` (`BBox` in
+   this repo's own `[N,W,S,E]` convention, with explicit converters to
+   CDO's different axis order), `crop.py` (real `cdo sellonlatbox`
+   subprocess cropping, not just a lookup). CLI: `weather geo
+   {crop,list}`. Works today for ERA5-Land/MERRA-2 output NetCDFs;
+   COSMO-REA6 can't be cropped yet — its production export has no
+   lat/lon (see `.claude/open.md`). Not wired into any `pipeline.py`
+   (standalone post-processing step by design).
 
 ## Operating rules for Claude Code (read first)
 
@@ -62,14 +82,15 @@ CI (`.github/workflows/ci.yml`) runs, and all must pass:
   conda-forge cfgrib/eccodes builds), numpy 1.26.*, pandas 2.2.*. Don't
   bump these.
 - **packaging**: conda-only workflow; `pip install -e . --no-deps` (never
-  `conda develop`); binaries (aria2, lbzip2, eccodes, cfgrib) in
+  `conda develop`); binaries (aria2, lbzip2, eccodes, cfgrib, cdo) in
   `weather_env.yml`, Python deps in `pyproject.toml`; `meta.yaml` version
   via Jinja2 `{% set version = ... %}`; never commit `_version.py`
   (setuptools-scm, `version_file=src/weather/_version.py`).
 
 ## CLI, containers, cross-repo
 
-- **CLI**: `python -m weather {info,validate,run}` (entry `weather.cli:main`).
+- **CLI**: `python -m weather {info,validate,run,geo}` (entry
+  `weather.cli:main`; `geo` has `{crop,list}` subcommands, see below).
   `validate.py` at root runs env/CLI/tests/structure/docker checks.
 - **Containers** (`infrastructure/container/`): Dockerfile, docker-compose.yml,
   entrypoint.sh route by `PIPELINE_MODE` ∈ {single-year, multi-year, merge,
@@ -101,14 +122,25 @@ weather/
     ├── settings.py                # EnvSettings: all *_ env → typed values
     ├── registry.py  cli.py  __main__.py
     ├── common/                    # shared, provider-agnostic
-    │   ├── derived_attributes.py  # apply_derived_fields (GHI/DHI/DNI, all providers)
+    │   ├── derived_attributes.py  # apply_derived_fields + shared formulas
+    │   │                          # (wind_speed, magnus_rh, bolton_rh,
+    │   │                          # ghi_from_diffuse_direct, dni_from_direct)
+    │   │                          # -- single source of truth; each provider's
+    │   │                          # transform.py imports and calls these
+    │   ├── solar_position.py      # spencer_zenith (ERA5-Land/MERRA-2; COSMO
+    │   │                          # has its own dask-chunked inline version,
+    │   │                          # see compute_dni's docstring for why)
     │   ├── download.py            # https/ftp atomic, checksums
     │   ├── decompress.py          # bz2 helpers (lbzip2/pbzip2/python)
     │   ├── parallel.py            # run_parallel (thread/process pools)
     │   ├── merge.py               # monthly NC → annual NC (unused by percentile now)
     │   ├── percentile.py          # select_representative_years (dead code, unused)
-    │   ├── net.py  validate.py  cleanup.py  env.py
-    │   └── dni_methodology.md
+    │   └── net.py  validate.py  cleanup.py  env.py
+    ├── geo/                       # country bbox + NetCDF cropping (provider-agnostic)
+    │   ├── bbox.py                 # BBox([N,W,S,E]) + to_cdo_lonlatbox()/to_area_list()
+    │   ├── countries.py            # COUNTRIES dict, get_bbox/list_countries
+    │   ├── crop.py                 # crop_netcdf/crop_to_country (cdo subprocess)
+    │   └── __init__.py             # façade
     ├── providers/
     │   ├── base.py                # WeatherProvider Protocol
     │   ├── base_downloader.py     # is_complete→skip / _fetch ; DownloadJob
@@ -124,10 +156,11 @@ weather/
     │   │   ├── downloader, fast_download, download
     │   │   ├── transform, export, pipeline, pipeline_interleaved
     │   │   ├── percentile_index, dni_pointwise, __init__
-    │   └── merra2/                # pipeline DONE; live verification pending
+    │   └── merra2/                # pipeline DONE; 2018 verified live
     │       ├── config, downloaded_attributes
     │       ├── downloader (OPeNDAP + Earthdata session), download
-    │       ├── transform, export, pipeline, __init__
+    │       ├── transform, export, pipeline
+    │       ├── percentile_index, dni_pointwise, __init__
     └── tests/                      # runners + tools + pytest units
         ├── (pytest) test_validation, test_derived_attributes,
         │            test_pipeline_integration
@@ -140,7 +173,9 @@ weather/
         │            check_first_hour, inspect_era5_eccodes,
         │            inspect_era5_grib, audit_imports
         ├── (MERRA-2) test_merra2_one_month, test_merra2_one_year,
-        │            test_merra2_multi_year
+        │            test_merra2_multi_year, verify_merra2_months
+        ├── compare_providers         # cross-provider (COSMO/ERA5/MERRA-2)
+        │            point + domain comparison; xlsx + matplotlib report
         └── mock_download            # CI helper
 ```
 
@@ -160,17 +195,103 @@ percentile_index.py (standalone KS-distance P10/P50/P90 script; optional) ·
 |------------|------------------|------------|--------------------|----------------|----------|
 | cosmo_rea6 | DWD OpenData     | 6 km       | monthly bz2        | monthly→annual | 94 (CPU) |
 | era5_land  | Copernicus CDS   | 0.1°       | monthly nc         | monthly        | 6 (I/O)  |
-| merra2     | GES DISC OPeNDAP | 0.5×0.625° | daily nc4, 2 coll. | monthly        | 8 (I/O)  |
+| merra2     | GES DISC OPeNDAP | 0.5×0.625° | daily nc4, 3 coll. | monthly        | 8 (I/O)  |
 
 - **RH source differs BY-DESIGN:** COSMO direct RELHUM_2M; ERA5-Land
-  dew-point Magnus; MERRA-2 q-based. Do NOT unify.
+  dew-point Magnus; MERRA-2 q-based (Bolton 1980). Do NOT unify — but
+  each provider's OWN formula is now single-sourced (see next bullet).
 - **Radiation:** COSMO splits direct(SWDIRS)+diffuse(SWDIFDS); ERA5-Land &
   MERRA-2 give GHI directly (ssrd-derived / SWGDN).
 - `common/derived_attributes.apply_derived_fields(ds, provider, sol_pos,
-  times)` is the ONE cross-provider entry for GHI/DHI/DNI. All providers
-  night-mask + enforce GHI=DHI+DNI·cos(zenith); DNI cos-guard at zenith>85.
-  (ERA5 pipeline's `night_mask=False` default concerns the monthly GHI
-  field, distinct from this DNI-path masking.)
+  times)` is the registry/testable-in-isolation entry for GHI/DHI/DNI/RH/
+  WS_10M (plain numpy or xarray in, works on tiny synthetic 1-D test
+  fixtures — see `tests/test_derived_attributes.py`). The gridded
+  production pipelines (each provider's `transform.py`) do NOT call
+  `apply_derived_fields` directly (COSMO/ERA5-Land need dask-chunked
+  xarray-native code for grid-scale performance) — instead, as of this
+  session, every provider's `transform.py` imports and calls the SAME
+  underlying pure formulas (`wind_speed`, `magnus_rh`, `bolton_rh`,
+  `ghi_from_diffuse_direct`, `dni_from_direct` — all in
+  `derived_attributes.py`; `spencer_zenith` in `solar_position.py`) that
+  the registry also calls, closing a real drift risk: `derived_attributes
+  .py`'s copies used to be independently hand-duplicated versions of each
+  provider's `transform.py` math (2 concrete bugs found and fixed: COSMO
+  GHI wasn't clipping each component before summing, and COSMO DNI was
+  missing the upper cos(zenith) bound — see docs/dni_methodology.md §5).
+  All providers night-mask + enforce GHI=DHI+DNI·cos(zenith); DNI
+  cos-guard at zenith>85 (`derived_attributes.DNI_ELEVATION_THRESHOLD_DEG`,
+  imported by COSMO's `compute_dni` rather than a separate hardcoded
+  literal). (ERA5 pipeline's `night_mask=False` default concerns the
+  monthly GHI field, distinct from this DNI-path masking.)
+- **Cross-provider comparison:** `tests/compare_providers.py` — point-wise
+  (DNI/DHI/GHI/T/RH/SF/ALBEDO) + whole-Europe domain stats across all three
+  2018 outputs; xlsx (one sheet/provider) + csv/parquet + matplotlib. Real,
+  documented differences (not bugs — see `docs/provider_differences.md`
+  for the quantified numbers and physical explanations): MERRA-2 RH reads
+  ~6 pts higher than ERA5-Land (different formula families — Magnus vs
+  specific-humidity-based, by design, do NOT unify); ERA5-Land/MERRA-2
+  albedo agree closely in summer, diverge most in the snow-transition
+  months; COSMO/ERA5-Land snowfall monthly totals are similar but hourly
+  timing barely correlates (r≈0.4) — different resolution/microphysics.
+  A COSMO-only `dni_method_comparison()` cross-checks its native exact
+  DNI/DHI (`SWDIRS_RAD`/cos(θz), Spencer solar position — NOT a GHI
+  decomposition) against pvlib's exact closure formula with NREL SPA
+  zenith (isolates solar-position precision) and, for reference only,
+  pvlib DIRINT (a GHI-only decomposition — the wrong tool for COSMO,
+  since its DHI is already known, but the only option ERA5-Land/MERRA-2
+  have; see `docs/dni_methodology.md` sec 11). COSMO's exported NetCDFs
+  carry no lat/lon (raw GRIBs already cleaned up, no CONST file) — the
+  script reconstructs it from the published rotated-pole grid definition
+  (best-effort, not verified against DWD's CONST file). COSMO RH
+  (`RELHUM_2M`, wired end-to-end via `downloaded_attributes.py`'s
+  `role`/`canonical_name` fields and `transform.build_month_dataset`)
+  and MERRA-2 snowfall/snow-depth (`PRECSNOLAND`/`SNODP`, the `lnd`
+  collection) both now appear in the live-regenerated 2018 data (see
+  the MERRA-2/COSMO providers table note below). COSMO ALBEDO remains
+  deliberately unbuilt: the downstream consumer that raised the question
+  (`pysam-photovoltaic-energy-simulation`) turned out to need only a
+  snow-depth-driven threshold, not real optical albedo, and COSMO
+  already has the equivalent field (`H_SNOW`) — see `compare_providers
+  .py`'s `SNOW_DEPTH` column and its module docstring. A true optical
+  albedo stays a documented option via DWD's `SOBS_RAD` (net shortwave,
+  instantaneous — NOT `ASOB_S`, its average-type sibling): `albedo =
+  ((SWDIRS_RAD + SWDIFDS_RAD) - SOBS_RAD) / (SWDIRS_RAD + SWDIFDS_RAD)`,
+  not built since no confirmed consumer needs it.
+
+## Country bbox + cropping (`geo/`)
+
+`weather.geo` exists so the downstream consumer
+`THD-Spatial-AI/merra2-energy-pipeline` doesn't need its own country-bbox
+or cropping logic — it should only do energy-potential analysis on data
+this repo has already cropped to the country it needs.
+
+- `countries.get_bbox(name)` / `list_countries()` — ~30 European
+  countries, trimmed port of that repo's `countries.py`: dropped the
+  `TIMEZONES` table and the German/French/English multilingual alias
+  table entirely (not partially kept); the pan-Europe entry is also
+  dropped since it's already the implicit default domain for every
+  provider here. `uk`/`united_kingdom` and `czech_republic`/`czechia`
+  remain as independent canonical entries (that's how upstream defined
+  them, not an alias lookup).
+- `bbox.BBox(north, west, south, east)` — canonical field order matches
+  this repo's own existing convention (`ERA5_AREA`/`MERRA2_AREA`, both
+  `[N,W,S,E]`), so `COUNTRIES` values are a drop-in for that env-var
+  pattern via `.to_area_list()`. CDO's `sellonlatbox` uses a **different**
+  axis order (`west,east,south,north`); `.to_cdo_lonlatbox()` converts
+  explicitly rather than leaving that to be re-derived per call site.
+- `crop.crop_netcdf()` / `crop.crop_to_country()` — real cropping (not a
+  lookup): subprocess wrapper around `cdo sellonlatbox`, atomic tmp-file
+  and rename like `common/decompress.py`. **Works today for ERA5-Land
+  and MERRA-2** output NetCDFs (regular, CF-compliant lat/lon grid).
+  **Does not work for COSMO-REA6 yet** — its production export has no
+  lat/lon at all (only rotated-pole `rlat`/`rlon` dims; cfgrib writes
+  2-D WGS84 lat/lon during transform, but only the experimental/unused
+  `compute_dni()` diagnostic reads them, and the real assembly path
+  drops them before export). Fixing that needs a COSMO export change,
+  not attempted here — see `.claude/open.md`.
+- **Not wired into any provider's `pipeline.py`.** `weather geo crop` is
+  a standalone post-processing step run against an already-exported
+  output file, by design — ask before auto-wiring it into `run_pipeline()`.
 
 ## Hard conventions (do not violate)
 
@@ -188,6 +309,25 @@ percentile_index.py (standalone KS-distance P10/P50/P90 script; optional) ·
    type hints; `logging` not print. Atomic writes (temp→rename).
    `HDF5_USE_FILE_LOCKING=FALSE` for NetCDF on parallel FS.
 5. Python 3.12+; src-layout; setuptools-scm (never commit `_version.py`).
+6. **One centralized default per cross-cutting knob, not one per
+   entrypoint.** e.g. `COSMO_CLEANUP`/`ERA5_CLEANUP`/`MERRA_CLEANUP`
+   (`EnvSettings.*_cleanup()` -> each `config.py`'s `cfg["cleanup"]`) is
+   the single default every `pipeline.py`'s `run_pipeline(cleanup: bool
+   | None = None, ...)` and every `test_<provider>_one_month/one_year/
+   multi_year.py`'s own `--cleanup`/`--no-cleanup` CLI flag resolves
+   from; same pattern for `*_FROM_YEAR`/`*_TO_YEAR`
+   (`EnvSettings.*_from_year()`/`*_to_year()`) on the three
+   `multi_year.py` scripts' `--from-year`/`--to-year` defaults — change
+   the env var once, every entrypoint picks it up; the CLI flag still
+   overrides per-invocation. Don't hardcode a knob's default
+   independently at each call site.
+7. **No `sys.path` manipulation.** `weather` is always `pip install -e .
+   --no-deps` (see packaging, above) — every module/script imports it
+   directly (`from weather.x import y`), never via a `sys.path.insert`
+   bootstrap. (`sys.path` controls the *import* search path, an
+   unrelated concern from `pathlib`/`os.path`, which build filesystem
+   path strings — swapping one for the other isn't a fix; the fix is
+   relying on the editable install, which the project already mandates.)
 
 ## Environment
 

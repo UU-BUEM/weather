@@ -30,6 +30,7 @@ import argparse
 import logging
 
 from weather.providers.era5_land.pipeline import run_pipeline
+from weather.settings import EnvSettings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,7 +54,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--night-mask", action="store_true")
     p.add_argument("--skip-download", action="store_true")
     p.add_argument("--resume", action="store_true")
-    p.add_argument("--cleanup", action="store_true")
+    p.add_argument(
+        "--cleanup", action="store_true",
+        default=EnvSettings.era5_cleanup(),
+        help="Delete GRIBs after successful export (default: keep, via ERA5_CLEANUP)",
+    )
     return p.parse_args()
 
 

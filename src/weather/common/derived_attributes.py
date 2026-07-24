@@ -54,9 +54,29 @@ logger = logging.getLogger(__name__)
 #: Solar zenith threshold (degrees) above which irradiance is forced to 0.
 NIGHT_ZENITH_DEG: float = 90.0
 
-#: cos(zenith) guard for COSMO-REA6 DNI — below this (~85 deg) the
-#: direct beam path is too long and the division diverges unreliably.
-_COS_GUARD: float = 0.087  # cos(85 deg)
+#: Minimum solar elevation (degrees) for which COSMO-REA6 DNI is
+#: reported; below this the direct-beam division is zeroed instead of
+#: amplifying near-horizon noise. Single source of truth for this
+#: number — ``providers.cosmo_rea6.transform.compute_dni`` imports it
+#: rather than hardcoding its own copy (see docs/dni_methodology.md
+#: sec 6). Matches ``tests.compare_providers``'s point-wise pvlib
+#: closure comparison too (sec 11), for a fair apples-to-apples check.
+DNI_ELEVATION_THRESHOLD_DEG: float = 5.0
+
+#: cos(zenith) lower guard for COSMO-REA6 DNI, derived from
+#: :data:`DNI_ELEVATION_THRESHOLD_DEG` (elevation 5 deg == zenith 85
+#: deg == cos(zenith) ~= 0.087) — below this the direct-beam path is
+#: too long and the division diverges unreliably.
+_COS_GUARD: float = float(
+    np.cos(np.radians(90.0 - DNI_ELEVATION_THRESHOLD_DEG))
+)
+
+#: Upper cos(zenith) bound — corrects float32 rounding in a Spencer-
+#: formula (or similar) dot-product from pushing cos(zenith) fractionally
+#: above 1.0, which would otherwise give DNI < the direct-beam input for
+#: an above-threshold cell (physically impossible, since cos(zenith)<=1
+#: always). See docs/dni_methodology.md sec 5.2.
+_COS_ZENITH_UPPER: float = 1.0
 
 #: Standard atmosphere pressure (Pa) used when the dataset has no
 #: surface-pressure variable.
@@ -180,6 +200,91 @@ def _dirint_dhi(
 
 
 # ---------------------------------------------------------------------------
+# Shared pure formulas
+# ---------------------------------------------------------------------------
+# Single source of truth for math ALSO used by each provider's own
+# transform.py (grid/dask-oriented, performance-tuned). Written with
+# duck-typed elementwise operations only (``**``, ``/``, ``.clip()``,
+# numpy ufuncs) so a provider's transform.py can call these directly on
+# lazy dask-backed xarray.DataArrays without forcing materialisation --
+# no ``np.asarray()`` coercion in here. Coercion to plain numpy (for the
+# dict-based ``apply_derived_fields`` callers below, and for the unit
+# tests in tests/test_derived_attributes.py) happens one layer up, in
+# each ``_<provider>_<field>`` wrapper.
+
+def wind_speed(u: Any, v: Any) -> Any:
+    """Scalar wind speed WS = sqrt(u**2 + v**2).
+
+    Identical across every provider (COSMO-REA6, ERA5-Land, MERRA-2) --
+    the magnitude is frame-invariant, so no vector rotation is needed
+    regardless of whether u/v are in a rotated-pole or WGS84 frame.
+    """
+    return (u ** 2 + v ** 2) ** 0.5
+
+
+def ghi_from_diffuse_direct(diffuse: Any, direct: Any) -> Any:
+    """GHI = diffuse + direct horizontal irradiance, each clipped to
+    ``[0, inf)`` *before* summing.
+
+    Clipping each component individually (not just the final sum)
+    matters: a single spurious negative component (rare GRIB artefact)
+    must not silently cancel out a real positive one.
+    """
+    return diffuse.clip(min=0.0) + direct.clip(min=0.0)
+
+
+def dni_from_direct(
+    direct: Any,
+    cos_zenith_safe: Any,
+    elevation_deg: Any,
+    elevation_threshold_deg: float = DNI_ELEVATION_THRESHOLD_DEG,
+) -> Any:
+    """DNI = direct / cos(zenith), zero where solar elevation is below
+    *elevation_threshold_deg* (see docs/dni_methodology.md sec 6).
+
+    The caller must pass an already-bounded ``cos_zenith_safe`` --
+    clipped to ``[cos(90 - elevation_threshold_deg), 1.0]`` -- and the
+    matching ``elevation_deg`` (see sec 5 for why both clip bounds
+    matter). A multiplicative mask is used instead of ``where`` so this
+    stays correct under both plain numpy (test fixtures) and
+    xarray/dask (COSMO's gridded pipeline) without depending on
+    ``np.where`` vs ``xr.where`` dispatch.
+    """
+    dni_raw = direct / cos_zenith_safe
+    above_threshold = elevation_deg >= elevation_threshold_deg
+    return dni_raw * above_threshold
+
+
+def magnus_rh(t_celsius: Any, td_celsius: Any) -> Any:
+    """Relative humidity (%) via the August-Roche-Magnus approximation
+    from temperature and dew point (both degC), clipped to ``[0, 100]``.
+
+    Used by ERA5-Land (the only provider with a dew-point field).
+    """
+    a, b = 17.625, 243.04
+    rh = 100.0 * np.exp(
+        (a * td_celsius) / (b + td_celsius) - (a * t_celsius) / (b + t_celsius)
+    )
+    return rh.clip(0.0, 100.0)
+
+
+def bolton_rh(specific_humidity: Any, pressure_pa: Any, t_celsius: Any) -> Any:
+    """Relative humidity (%) from specific humidity, pressure, and
+    temperature (degC), via the Bolton (1980) saturation-vapor-pressure
+    curve, clipped to ``[0, 100]``.
+
+    Used by MERRA-2 (the only provider with specific humidity instead
+    of a dew-point field). Deliberately a DIFFERENT formula family from
+    :func:`magnus_rh` -- see ``CLAUDE.md``: "RH source differs
+    BY-DESIGN ... do NOT unify."
+    """
+    e = (specific_humidity * pressure_pa) / (0.622 + 0.378 * specific_humidity)
+    es = 611.2 * np.exp(17.67 * t_celsius / (t_celsius + 243.5))
+    rh = 100.0 * e / es
+    return rh.clip(0.0, 100.0)
+
+
+# ---------------------------------------------------------------------------
 # COSMO-REA6 formula functions
 # ---------------------------------------------------------------------------
 
@@ -189,10 +294,9 @@ def _cosmo_ghi(
     times: Any,
 ) -> np.ndarray:
     """GHI = SWDIFDS_RAD + SWDIRS_RAD, night-masked."""
-    ghi = (
-        np.asarray(ds["SWDIFDS_RAD"], dtype=float)
-        + np.asarray(ds["SWDIRS_RAD"], dtype=float)
-    )
+    diffuse = np.asarray(ds["SWDIFDS_RAD"], dtype=float)
+    direct = np.asarray(ds["SWDIRS_RAD"], dtype=float)
+    ghi = ghi_from_diffuse_direct(diffuse, direct)
     return mask_night(ghi, sol_pos["zenith"])
 
 
@@ -213,20 +317,35 @@ def _cosmo_dni(
     sol_pos: dict[str, Any],
     times: Any,
 ) -> np.ndarray:
-    """DNI = SWDIRS_RAD / cos(zenith) with a zenith guard.
+    """DNI = SWDIRS_RAD / cos(zenith), zeroed below
+    :data:`DNI_ELEVATION_THRESHOLD_DEG` elevation.
 
-    Values where cos(zenith) <= ``_COS_GUARD`` (~85 deg) are set to 0
-    to prevent divergence near the horizon.
+    ``cos(zenith)`` is clipped to ``[_COS_GUARD, _COS_ZENITH_UPPER]``
+    before dividing -- matches
+    ``providers.cosmo_rea6.transform.compute_dni``'s ``[1e-3, 1.0]``
+    bounds exactly (see docs/dni_methodology.md sec 5): the lower bound
+    prevents a division blow-up near the horizon, the upper bound
+    corrects float32 rounding that can otherwise push cos(zenith)
+    fractionally above 1.0.
     """
-    cos_z = np.cos(
-        np.radians(np.asarray(sol_pos["zenith"], dtype=float))
+    zenith = np.asarray(sol_pos["zenith"], dtype=float)
+    cos_zenith_safe = np.clip(np.cos(np.radians(zenith)), _COS_GUARD, _COS_ZENITH_UPPER)
+    elevation = 90.0 - zenith
+    dni = dni_from_direct(
+        np.asarray(ds["SWDIRS_RAD"], dtype=float), cos_zenith_safe, elevation,
     )
-    safe_cos = np.where(cos_z > _COS_GUARD, cos_z, np.nan)
-    dni = np.asarray(ds["SWDIRS_RAD"], dtype=float) / safe_cos
-    return mask_night(
-        np.nan_to_num(dni, nan=0.0),
-        sol_pos["zenith"],
-    )
+    return mask_night(dni, zenith)
+
+
+def _cosmo_wind_speed(
+    ds: dict[str, Any],
+    sol_pos: dict[str, Any],
+    times: Any,
+) -> np.ndarray:
+    """Scalar 10 m wind speed ``WS_10M = sqrt(U_10M**2 + V_10M**2)``."""
+    u = np.asarray(ds["U_10M"], dtype=float)
+    v = np.asarray(ds["V_10M"], dtype=float)
+    return wind_speed(u, v)
 
 
 # ---------------------------------------------------------------------------
@@ -288,8 +407,21 @@ def _era5_ghi(
     sol_pos: dict[str, Any],
     times: Any,
 ) -> np.ndarray:
-    """GHI = ssrd / 3600 (J/m2 -> W/m2), night-masked."""
-    ghi = np.asarray(ds["ssrd"], dtype=float) / 3600.0
+    """GHI = ssrd / 3600 (J/m2 -> W/m2), night-masked.
+
+    .. note::
+       ``ssrd`` must already be **de-accumulated** to a per-hour energy
+       increment before calling this (raw multi-step GRIB ``ssrd`` is a
+       running total since a forecast day's start, not a per-hour
+       value). The gridded pipeline does that de-accumulation in
+       ``providers.era5_land.transform._deaccumulate_along_step`` --
+       genuinely provider-specific stateful logic over the GRIB
+       ``step`` dimension, not a pure elementwise formula, so it isn't
+       duplicated here. This function only performs the final
+       (shared-in-spirit but ERA5-Land-only) J/m2 -> W/m2 conversion,
+       matching ``transform._deaccumulate_to_ghi``'s last two lines.
+    """
+    ghi = (np.asarray(ds["ssrd"], dtype=float) / 3600.0).clip(min=0.0)
     return mask_night(ghi, sol_pos["zenith"])
 
 
@@ -334,31 +466,21 @@ def _era5_rh(
     sol_pos: dict[str, Any],
     times: Any,
 ) -> np.ndarray:
-    """Relative humidity (%) via the August-Roche-Magnus approximation.
+    """Relative humidity (%) via :func:`magnus_rh`.
 
     Computed from 2 m temperature and 2 m dew point.  Inputs are read
     in **Kelvin** (ERA5-Land raw ``t2m``/``d2m``) and converted to
-    Celsius internally::
-
-        RH = 100 * exp( a*Td/(b+Td) - a*T/(b+T) )
-
-    with ``a = 17.625``, ``b = 243.04`` and T, Td in degC.  Result is
-    clipped to [0, 100].
+    Celsius before calling the shared formula.
 
     .. note::
        The gridded pipeline computes RH inside
-       ``providers.era5_land.transform`` (from raw Kelvin, before unit
-       conversion).  This registry entry mirrors that formula so the
-       manifest is complete and self-describing; pass raw-Kelvin
-       ``t2m``/``d2m`` if calling it directly.
+       ``providers.era5_land.transform._compute_rh``, from raw Kelvin
+       before unit conversion, but calls this same :func:`magnus_rh`
+       for the actual math -- pass raw-Kelvin ``t2m``/``d2m`` here too.
     """
     t2m = np.asarray(ds["t2m"], dtype=float)
     d2m = np.asarray(ds["d2m"], dtype=float)
-    t = t2m - 273.15
-    td = d2m - 273.15
-    a, b = 17.625, 243.04
-    rh = 100.0 * np.exp((a * td) / (b + td) - (a * t) / (b + t))
-    return np.clip(rh, 0.0, 100.0)
+    return magnus_rh(t2m - 273.15, d2m - 273.15)
 
 
 def _era5_wind_speed(
@@ -366,13 +488,41 @@ def _era5_wind_speed(
     sol_pos: dict[str, Any],
     times: Any,
 ) -> np.ndarray:
-    """Scalar 10 m wind speed ``WS_10M = sqrt(u10**2 + v10**2)`` (m/s).
-
-    Magnitude is frame-invariant, so no vector rotation is needed.
-    """
+    """Scalar 10 m wind speed ``WS_10M = sqrt(u10**2 + v10**2)`` (m/s)."""
     u = np.asarray(ds["u10"], dtype=float)
     v = np.asarray(ds["v10"], dtype=float)
-    return np.sqrt(u ** 2 + v ** 2)
+    return wind_speed(u, v)
+
+
+def _merra2_rh(
+    ds: dict[str, Any],
+    sol_pos: dict[str, Any],
+    times: Any,
+) -> np.ndarray:
+    """Relative humidity (%) via :func:`bolton_rh`.
+
+    Inputs: ``QV2M`` (specific humidity, kg/kg), ``PS`` (surface
+    pressure, Pa), ``T2M`` (temperature, **already degC** -- MERRA-2's
+    ``T2M`` is converted from Kelvin upstream, unlike ERA5-Land's raw
+    Kelvin ``t2m``/``d2m``; see
+    ``providers.merra2.transform._compute_rh`` for the same formula
+    applied to the full grid).
+    """
+    q = np.asarray(ds["QV2M"], dtype=float)
+    p = np.asarray(ds["PS"], dtype=float)
+    t = np.asarray(ds["T2M"], dtype=float)
+    return bolton_rh(q, p, t)
+
+
+def _merra2_wind_speed(
+    ds: dict[str, Any],
+    sol_pos: dict[str, Any],
+    times: Any,
+) -> np.ndarray:
+    """Scalar 10 m wind speed ``WS_10M = sqrt(U10M**2 + V10M**2)`` (m/s)."""
+    u = np.asarray(ds["U10M"], dtype=float)
+    v = np.asarray(ds["V10M"], dtype=float)
+    return wind_speed(u, v)
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +557,11 @@ DERIVED_FIELDS: dict[str, dict[str, dict[str, Any]]] = {
             "unit": "W/m2",
             "formula": _cosmo_dni,
         },
+        "WS_10M": {
+            "description": "Scalar 10 m wind speed from U_10M/V_10M components",
+            "unit": "m/s",
+            "formula": _cosmo_wind_speed,
+        },
     },
     "MERRA2": {
         "GHI": {
@@ -431,6 +586,19 @@ DERIVED_FIELDS: dict[str, dict[str, dict[str, Any]]] = {
             ),
             "unit": "W/m2",
             "formula": _merra2_dni,
+        },
+        "RH": {
+            "description": (
+                "Relative Humidity: QV2M converted to vapor pressure, "
+                "divided by Bolton (1980) saturation vapor pressure at T2M"
+            ),
+            "unit": "%",
+            "formula": _merra2_rh,
+        },
+        "WS_10M": {
+            "description": "Scalar 10 m wind speed from U10M/V10M components",
+            "unit": "m/s",
+            "formula": _merra2_wind_speed,
         },
     },
     # ERA5-Land supplies only total shortwave (ssrd), so only GHI is a

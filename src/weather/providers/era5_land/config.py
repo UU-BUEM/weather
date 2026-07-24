@@ -61,6 +61,7 @@ def get_config() -> dict[str, Any]:
         "ncores": EnvSettings.era5_ncores(),
         "threads_per_job": EnvSettings.era5_threads_per_job(),
         "conda_env": EnvSettings.era5_conda_env(),
+        "cleanup": EnvSettings.era5_cleanup(),
 
         # ---- CDS request ----
         "dataset": EnvSettings.era5_cds_dataset(),

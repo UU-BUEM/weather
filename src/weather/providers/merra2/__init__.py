@@ -5,9 +5,13 @@ Public entry points:
 * :func:`~weather.providers.merra2.pipeline.run_pipeline` — process one
   year (download -> transform -> export monthly NetCDF).
 * :func:`~weather.providers.merra2.download.download_all` — fetch daily
-  rad/slv NetCDF4 files from NASA GES DISC via OPeNDAP.
+  rad/slv/lnd NetCDF4 files from NASA GES DISC via OPeNDAP.
 * :func:`~weather.providers.merra2.transform.build_monthly_dataset` —
   daily files -> analysis-ready monthly dataset with derived GHI.
+* :mod:`~weather.providers.merra2.percentile_index` — P10/P50/P90
+  representative-year mosaics from historical monthly output.
+* :mod:`~weather.providers.merra2.dni_pointwise` — opt-in DNI/DHI
+  decomposition for selected locations.
 """
 
 from __future__ import annotations

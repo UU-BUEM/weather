@@ -31,15 +31,18 @@ keep the header attached across that specific redirect chain.
 Download model
 ---------------
 * **All-attributes-per-collection-per-day**: one OPeNDAP request fetches
-  every configured attribute of one collection (``rad`` or ``slv``) for
-  one calendar day, cropped to :func:`~weather.providers.merra2.config`'s
+  every configured attribute of one collection (see
+  :data:`~weather.providers.merra2.downloaded_attributes.COLLECTIONS`)
+  for one calendar day, cropped to
+  :func:`~weather.providers.merra2.config`'s
   ``area`` (Europe by default).  MERRA-2 files are per-DAY (unlike
   COSMO's per-month), so :class:`Merra2DownloadJob` carries a ``day``
   field — see :mod:`weather.providers.base_downloader`'s own docstring,
   which names MERRA-2 as the example provider needing this.
 * **No queue**: unlike CDS, GES DISC's OPeNDAP server has no
   per-account job queue, so ``remote_size`` and retries are plain
-  HTTP semantics (see :data:`weather.settings.EnvSettings.merra2_opendap_max_concurrent`).
+  HTTP semantics (see
+  :data:`weather.settings.EnvSettings.merra2_opendap_max_concurrent`).
 """
 
 from __future__ import annotations
@@ -71,10 +74,12 @@ _TRUSTED_AUTH_HOSTS = frozenset({
 _PRODUCT_TOKEN = {
     "rad": "tavg1_2d_rad_Nx",
     "slv": "tavg1_2d_slv_Nx",
+    "lnd": "tavg1_2d_lnd_Nx",
 }
 
 #: MERRA-2 "stream" number prefix by date range (fixed by NASA's naming;
-#: see https://disc.gsfc.nasa.gov/information/glossary?title=MERRA-2%20File%20Naming%20Conventions).
+#: see https://disc.gsfc.nasa.gov/information/glossary?title=
+#: MERRA-2%20File%20Naming%20Conventions).
 _STREAM_RANGES: tuple[tuple[int, int, int], ...] = (
     (1980, 1991, 100),
     (1992, 2000, 200),
@@ -133,8 +138,9 @@ class Merra2DownloadJob:
     Unlike COSMO/ERA5-Land's ``DownloadJob(attribute, year, month)``,
     MERRA-2 files are per-DAY and one request already covers every
     attribute of a *collection* (see
-    :func:`~weather.providers.merra2.downloaded_attributes.attrs_by_collection`),
-    so the job is keyed by ``(collection, year, month, day)`` rather than
+    :func:`~weather.providers.merra2.downloaded_attributes.
+    attrs_by_collection`), so the job is keyed by
+    ``(collection, year, month, day)`` rather than
     by individual attribute.  Sanctioned by
     :mod:`weather.providers.base_downloader`'s own docstring, which
     names MERRA-2 as the provider expected to define its own job type.
@@ -142,7 +148,9 @@ class Merra2DownloadJob:
     Attributes
     ----------
     collection : str
-        Short collection key, ``"rad"`` or ``"slv"``.
+        Short collection key (a key of
+        :data:`~weather.providers.merra2.downloaded_attributes.COLLECTIONS`,
+        currently ``"rad"``, ``"slv"``, or ``"lnd"``).
     year, month, day : int
         Calendar date this request covers.
     """
@@ -200,7 +208,8 @@ class Merra2Downloader(BaseDownloader):
 
         attrs = attrs_by_collection()[job.collection]
         var_terms = [
-            f"{ATTRIBUTES[a]['m2_name']}[0:1:23][{lat0}:1:{lat1}][{lon0}:1:{lon1}]"
+            f"{ATTRIBUTES[a]['m2_name']}"
+            f"[0:1:23][{lat0}:1:{lat1}][{lon0}:1:{lon1}]"
             for a in attrs
         ]
         coord_terms = [
@@ -248,7 +257,8 @@ class Merra2Downloader(BaseDownloader):
         OPeNDAP subset responses don't reliably report a size before
         the transfer completes across all THREDDS/Hyrax server
         configurations, so completeness is existence-based — the same
-        rationale :class:`~weather.providers.era5_land.downloader.Era5Downloader`
+        rationale
+        :class:`~weather.providers.era5_land.downloader.Era5Downloader`
         uses for the CDS queue.
         """
         return None

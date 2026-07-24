@@ -299,7 +299,105 @@ speed `WS_10M = √(U² + V²)` is invariant under rotation and is correct as-is
 
 ---
 
-## 10. References
+## 11. Point-wise validation: pvlib closure vs Spencer (`tests/compare_providers.py`)
+
+Section 3 explains why the gridded `compute_dni()` uses Spencer (1971)
+instead of pvlib: pvlib's `get_solarposition()` doesn't vectorise across
+698,752 cells. That constraint doesn't apply to a **single cell**, so
+`tests/compare_providers.py`'s `dni_method_comparison()` cross-checks
+COSMO's native DNI/DHI against two independent pvlib-based estimates at
+one grid cell for one month:
+
+1. **`DNI_pvlib_closure`** — the same exact closure equation
+   `DNI = (GHI - DHI) / cos(θ_z)` from §4.1, using COSMO's own known GHI
+   and DHI, but with pvlib's NREL SPA solar position (`pvlib.
+   irradiance.complete_irradiance`) instead of Spencer. This isolates
+   *only* the solar-position algorithm's contribution — per §2.1, that
+   difference should be negligible (Spencer ±0.1–0.3° vs SPA <0.0003°,
+   both dwarfed by COSMO's own ~5–10° effective radiation uncertainty).
+2. **`DNI_pvlib_dirint`** / **`DHI_pvlib_dirint`** — a DIRINT
+   decomposition of GHI *alone* (`pvlib.irradiance.dirint`), blind to
+   COSMO's already-known DHI. Per §4.2 this is **not** the right tool
+   for COSMO (real DHI is available), so it is *not* used as COSMO's
+   alternative DNI — it's included purely as a reference point for the
+   error ERA5-Land and MERRA-2 are stuck with, since neither ever stores
+   a direct/diffuse split and must decompose GHI to get DNI/DHI at all
+   (`providers/era5_land/dni_pointwise.py`,
+   `providers/merra2/dni_pointwise.py`).
+
+A live run at an Arctic-edge cell (70.5°N, 25°E, June 2018) measured, at
+matched hourly resolution against COSMO's native DNI/DHI:
+
+| Estimate                             | bias (est−native) | MAE   | RMSE  | r      |
+| ------------------------------------- | -----------------: | ----: | ----: | -----: |
+| `DNI_pvlib_closure` (exact, SPA zenith) |             +0.15 W/m² | 0.90 W/m² |  7.19 W/m² | 0.9992 |
+| `DNI_pvlib_dirint` (GHI-only decomp.)  |            +11.53 W/m² | 24.82 W/m² | 43.81 W/m² | 0.9717 |
+| `DHI_pvlib_dirint` (GHI-only decomp.)  |             −2.15 W/m² |  8.69 W/m² | 16.87 W/m² | 0.9835 |
+
+This confirms both predictions exactly: the closure formula (same
+known GHI/DHI, only the solar-position algorithm differs) reproduces
+COSMO's native DNI almost exactly — RMSE 7.19 W/m² is noise-level
+against a ~206 W/m² mean DNI at this cell, and r=0.999 leaves essentially
+nothing unexplained. DIRINT, forced to guess without the known DHI, is
+~6x worse by RMSE — real decomposition-model error, not solar-position
+error, exactly as §4.2 predicts. This is also indirect confirmation that
+DHI is correctly the diffuse component and DNI the direct one (see the
+module docstring's SWDIRS_RAD/SWDIFDS_RAD note): if the two were
+swapped, the exact closure formula would not reproduce COSMO's native
+DNI this closely.
+
+Both `compute_dni()`'s 5° elevation threshold and its `[1e-3, 1.0]`
+`cos(θ_z)` clipping (§5–6) apply equally to the closure-formula
+division, since it is the same equation — near-horizon numerical
+sensitivity is a property of `1/cos(θ_z)` itself, not of which solar
+position feeds it. This matters more at high latitude, where the sun
+lingers near the horizon for hours rather than minutes, so more
+timesteps sit near the masking threshold than at mid-latitudes.
+`dni_method_comparison()` applies the same 5° threshold for a fair,
+apples-to-apples comparison against COSMO's native (already-masked) DNI.
+
+### 11.1 Swap test — empirical confirmation of SWDIRS_RAD/SWDIFDS_RAD
+
+Everything above compares two *derivations* against each other — it
+never checks either against an independent ground truth. As a targeted
+check on one specific claim (that `SWDIRS_RAD` really is the direct
+component, not `SWDIFDS_RAD`), the labels were deliberately swapped and
+the same exact closure formula re-run: `ds_dhi_swapped = SWDIRS_RAD`
+(pretending the direct field is diffuse), `swapped_DNI = (GHI -
+ds_dhi_swapped) / cos(θ_z)`. Result, same cell/month as above:
+
+| Labeling | bias | MAE | RMSE | r |
+| --- | ---: | ---: | ---: | ---: |
+| Correct (SWDIRS_RAD = direct) | +0.15 W/m² | 0.90 W/m² | 7.19 W/m² | 0.9992 |
+| Swapped | +174.19 W/m² | 227.32 W/m² | 268.24 W/m² | 0.2201 |
+
+RMSE increases 37x and correlation collapses to near-noise under the
+swap — strong empirical confirmation, independent of any documentation
+or naming convention, that the current labeling is correct.
+
+### 11.2 Physical plausibility — independent of any cross-method comparison
+
+Two checks against physical law / astronomy rather than another
+derivation, at the same cell:
+
+- **Clear-sky / extraterrestrial bound.** COSMO's native DNI never
+  exceeded the top-of-atmosphere extraterrestrial irradiance (0/720
+  hours in June 2018 — a hard physical impossibility if violated), and
+  never exceeded a clear-sky model (pvlib's Ineichen, plus a 50 W/m²
+  tolerance) either (also 0/720 hours) — every deviation from clear-sky
+  was DNI sitting *below* it, i.e. real cloud attenuation, never above.
+- **Seasonal cycle at 70.5°N.** Monthly mean DNI is ~0 W/m² in
+  Nov/Dec/Jan (near-total polar night, 0–2.2 daylight hours/day) and
+  peaks at 218–231 W/m² in May/July (22–24 daylight hours/day,
+  near-continuous midnight sun) — the expected Arctic-latitude
+  signature, not a mid-latitude seasonal curve.
+
+Both are consistency-with-physical-law checks, not comparisons against
+an independent measured/satellite product (e.g. a pyranometer station
+or a product like CAMS/SARAH) — that would need external data this
+repo doesn't currently have access to; ask if you want that explored.
+
+## 12. References
 
 - Spencer, J. W. (1971). Fourier series representation of the position of
   the sun. *Search*, 2(5), 172.

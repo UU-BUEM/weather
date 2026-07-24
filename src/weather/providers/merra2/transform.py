@@ -40,6 +40,12 @@ Design goals
   (0.1 deg).  This module crops to the *same geographic* Europe box but
   leaves data on MERRA-2's own grid — no interpolation.  Cross-provider
   regridding, if ever needed, is a separate future task.
+* **Timestamps are on the half-hour, by design.**  ``tavg1_2d`` values
+  are hourly time-averages labeled at the midpoint, so ``time`` lands on
+  ``HH:30`` (unlike ERA5-Land/COSMO's ``HH:00``).  This is intentionally
+  NOT relabeled to ``HH:00`` here — see ``docs/MERRA2_PIPELINE_GUIDE.md``
+  ("Timestamp convention"). Any cross-provider merge must handle the
+  30-min offset explicitly.
 """
 
 from __future__ import annotations
@@ -52,23 +58,10 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from ...common.derived_attributes import apply_derived_fields
-from ..era5_land.transform import spencer_zenith
+from ...common.derived_attributes import apply_derived_fields, bolton_rh, wind_speed
+from ...common.solar_position import spencer_zenith
 
 logger = logging.getLogger(__name__)
-
-#: Bolton (1980) saturation-vapor-pressure formula constants.
-_BOLTON_A = 17.67
-_BOLTON_B = 243.5
-#: es(T) prefactor in Pa (6.112 hPa x 100).
-_BOLTON_ES0_PA = 611.2
-
-logger.debug(
-    "Reusing weather.providers.era5_land.transform.spencer_zenith for "
-    "solar-zenith computation; this is generic astronomy math with no "
-    "ERA5-specific coupling. TODO: promote to weather.common if a 3rd "
-    "provider needs it, per CLAUDE.md's 'shared logic in common/' rule."
-)
 
 
 # ---------------------------------------------------------------------------
@@ -78,13 +71,17 @@ logger.debug(
 def _convert_units(ds: xr.Dataset) -> xr.Dataset:
     """Apply the unit conversions declared in ``downloaded_attributes``.
 
-    Only ``T2M`` needs a conversion (Kelvin -> Celsius); every other raw
-    attribute is already in its target unit.
+    ``T2M`` (Kelvin -> Celsius) and ``PRECSNOLAND`` (kg/m^2/s ->
+    kg/m^2/h, matching COSMO/ERA5-Land's snowfall convention); every
+    other raw attribute is already in its target unit.
     """
     out = ds
     if "T2M" in out:
         out["T2M"] = out["T2M"] - 273.15
         out["T2M"].attrs["units"] = "degC"
+    if "PRECSNOLAND" in out:
+        out["PRECSNOLAND"] = out["PRECSNOLAND"] * 3600.0
+        out["PRECSNOLAND"].attrs["units"] = "kg/m^2/h"
     return out
 
 
@@ -126,10 +123,9 @@ def _compute_rh(ds: xr.Dataset) -> xr.DataArray | None:
     t_degc = ds["T2M"]
     p = ds["PS"]
 
-    e = (q * p) / (0.622 + 0.378 * q)
-    es = _BOLTON_ES0_PA * np.exp(_BOLTON_A * t_degc / (t_degc + _BOLTON_B))
-    rh = (100.0 * e / es).clip(0.0, 100.0)
-
+    # Formula is derived_attributes.bolton_rh -- single source of
+    # truth, also used by derived_attributes._merra2_rh.
+    rh = cast(xr.DataArray, bolton_rh(q, p, t_degc))
     rh.name = "RH"
     rh.attrs = {
         "long_name": "Relative Humidity",
@@ -152,7 +148,9 @@ def _compute_wind_speed(ds: xr.Dataset) -> xr.DataArray | None:
         )
         return None
 
-    ws = cast(xr.DataArray, np.sqrt(ds["U10M"] ** 2 + ds["V10M"] ** 2))
+    # Formula is derived_attributes.wind_speed -- single source of
+    # truth, shared with every provider.
+    ws = cast(xr.DataArray, wind_speed(ds["U10M"], ds["V10M"]))
     ws.name = "WS_10M"
     ws.attrs = {
         "long_name": "Wind speed at 10 m",
@@ -170,6 +168,7 @@ def _compute_wind_speed(ds: xr.Dataset) -> xr.DataArray | None:
 def build_monthly_dataset(
     rad_paths: list[Path],
     slv_paths: list[Path],
+    lnd_paths: list[Path],
     *,
     year: int,
     month: int,
@@ -182,8 +181,11 @@ def build_monthly_dataset(
         Daily ``rad`` collection files (``SWGDN``, ``ALBEDO``) for this
         month, one per day.
     slv_paths : list[Path]
-        Daily ``slv`` collection files (``T2M``, ``U/V`` winds, ``PS``,
-        ``QV2M``) for this month, one per day.
+        Daily ``slv`` collection files (``T2M``, ``U/V`` winds at 2/10/50 m,
+        ``PS``, ``QV2M``) for this month, one per day.
+    lnd_paths : list[Path]
+        Daily ``lnd`` collection files (``SNODP``, ``PRECSNOLAND``) for
+        this month, one per day.
     year, month : int
         Calendar year/month these files cover.
 
@@ -195,8 +197,9 @@ def build_monthly_dataset(
         module docs).
     """
     logger.info(
-        "Building MERRA-2 monthly dataset %d-%02d from %d rad + %d slv "
-        "daily file(s)", year, month, len(rad_paths), len(slv_paths),
+        "Building MERRA-2 monthly dataset %d-%02d from %d rad + %d slv + "
+        "%d lnd daily file(s)",
+        year, month, len(rad_paths), len(slv_paths), len(lnd_paths),
     )
 
     ds_rad = xr.open_mfdataset(
@@ -205,13 +208,19 @@ def build_monthly_dataset(
     ds_slv = xr.open_mfdataset(
         sorted(str(p) for p in slv_paths), combine="by_coords",
     )
+    ds_lnd = xr.open_mfdataset(
+        sorted(str(p) for p in lnd_paths), combine="by_coords",
+    )
 
     # Same bbox/day requests against the same native grid -> spatial and
     # time coords already match exactly; no reindex-tolerance dance
     # needed here, unlike ERA5-Land's multi-cube GRIB alignment problem.
-    ds = xr.merge([ds_rad, ds_slv], join="exact", combine_attrs="override")
+    ds = xr.merge(
+        [ds_rad, ds_slv, ds_lnd], join="exact", combine_attrs="override",
+    )
     ds_rad.close()
     ds_slv.close()
+    ds_lnd.close()
 
     ds = ds.sortby("time")
 
@@ -278,13 +287,19 @@ def build_monthly_dataset(
             x=("x", np.arange(ds.sizes["x"])),
         )
 
-    ds.attrs.setdefault("provider", "MERRA2")
-    ds.attrs.setdefault("Conventions", "CF-1.8")
-    ds.attrs.setdefault(
-        "grid_note",
+    # Drop raw GES DISC per-day global attrs (Filename, GranuleID,
+    # RangeBeginningDate, history, ...) inherited from whichever daily
+    # file `xr.merge(..., combine_attrs="override")` picked first above
+    # — otherwise they'd misleadingly describe day 1 of the source data
+    # rather than the merged month, unlike COSMO/ERA5-Land's clean
+    # global-attr set (era5_land/transform.py strips GRIB_* the same way).
+    ds.attrs.clear()
+    ds.attrs["provider"] = "MERRA2"
+    ds.attrs["Conventions"] = "CF-1.8"
+    ds.attrs["grid_note"] = (
         "Europe box (same N/W/S/E as ERA5-Land), MERRA-2's own native "
         "0.5x0.625 deg grid — NOT regridded/interpolated onto ERA5-Land's "
-        "0.1 deg grid.",
+        "0.1 deg grid."
     )
 
     return ds

@@ -33,7 +33,7 @@ def get_config() -> dict[str, Any]:
         Keys: ``base_url``, ``const_url``, ``work_dir``,
         ``download_dir``, ``decompress_dir``, ``processed_dir``,
         ``output_dir``, ``year``, ``attributes``, ``ncores``,
-        ``threads_per_job``, ``decompressor``, ``conda_env``.
+        ``threads_per_job``, ``decompressor``, ``conda_env``, ``cleanup``.
     """
     return {
         "base_url": EnvSettings.cosmo_base_url(),
@@ -50,4 +50,5 @@ def get_config() -> dict[str, Any]:
         "threads_per_job": EnvSettings.cosmo_threads_per_job(),
         "decompressor": EnvSettings.cosmo_decompressor(),
         "conda_env": EnvSettings.cosmo_conda_env(),
+        "cleanup": EnvSettings.cosmo_cleanup(),
     }

@@ -2,9 +2,9 @@
 
 Orchestrates, for one year:
 
-    1. **Download** — fetch daily rad/slv NetCDF4 files (OPeNDAP,
+    1. **Download** — fetch daily rad/slv/lnd NetCDF4 files (OPeNDAP,
        cropped to the configured Europe box) from NASA GES DISC.
-    2. **Transform** — merge each month's ~60 daily files (2
+    2. **Transform** — merge each month's ~90 daily files (3
        collections x ~30 days), convert units, derive GHI/WS_10M/RH.
     3. **Export** — write one compressed NetCDF-4 per month.
 
@@ -18,9 +18,9 @@ Pipeline flow
 
     run_pipeline(year=YYYY)
       ├── Phase 1 — Download (<=opendap_max_concurrent requests)
-      │     2 collections x n_days -> download/MERRA2_<collection>_<YYYYMMDD>.nc4
+      │     3 collections x n_days -> download/MERRA2_<collection>_<YYYYMMDD>.nc4
       └── Phase 2 — Transform + Export (per month, process pool)
-            merge daily rad+slv files -> GHI/WS_10M/RH
+            merge daily rad+slv+lnd files -> GHI/WS_10M/RH
             -> output/MERRA2_<YYYY>_<MM>_all_attrs.nc
 
 Typical usage::
@@ -59,6 +59,7 @@ os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
 def _transform_export_one(
     rad_paths: list[str],
     slv_paths: list[str],
+    lnd_paths: list[str],
     year: int,
     month: int,
     output_dir: str,
@@ -88,7 +89,8 @@ def _transform_export_one(
     if skip_existing and out_path.exists() and out_path.stat().st_size > 0:
         return f"{year}-{month:02d}: skipped (exists)"
 
-    missing = [p for p in (*rad_paths, *slv_paths) if not Path(p).exists()]
+    all_paths = (*rad_paths, *slv_paths, *lnd_paths)
+    missing = [p for p in all_paths if not Path(p).exists()]
     if missing:
         return f"{year}-{month:02d}: FAIL (missing {len(missing)} daily file(s))"
 
@@ -96,6 +98,7 @@ def _transform_export_one(
         ds = build_monthly_dataset(
             [Path(p) for p in rad_paths],
             [Path(p) for p in slv_paths],
+            [Path(p) for p in lnd_paths],
             year=year,
             month=month,
         )
@@ -108,7 +111,7 @@ def _transform_export_one(
         )
         ds.close()
         if cleanup:
-            for p in (*rad_paths, *slv_paths):
+            for p in all_paths:
                 with contextlib.suppress(OSError):
                     Path(p).unlink()
         return f"{year}-{month:02d}: OK"
@@ -130,7 +133,7 @@ def run_pipeline(
     complevel: int = 1,
     skip_download: bool = False,
     resume: bool = False,
-    cleanup: bool = False,
+    cleanup: bool | None = None,
 ) -> list[Path]:
     """Execute the MERRA-2 pipeline for *year*.
 
@@ -151,8 +154,10 @@ def run_pipeline(
         Assume daily NetCDF4 files already present in ``download_dir``.
     resume : bool
         Skip months whose output ``.nc`` already exists.
-    cleanup : bool
+    cleanup : bool, optional
         Remove the downloaded daily files after successful export.
+        Default: ``config["cleanup"]`` (``MERRA_CLEANUP`` env var,
+        itself defaulting to ``False`` -- keep everything).
 
     Returns
     -------
@@ -166,6 +171,7 @@ def run_pipeline(
     year = year or cfg["year"]
     months = months or list(range(1, 13))
     ncores = ncores or cfg["ncores"]
+    cleanup = cfg["cleanup"] if cleanup is None else cleanup
 
     t0 = time.perf_counter()
     logger.info("=" * 60)
@@ -209,6 +215,7 @@ def run_pipeline(
         (
             _daily_paths(m, "rad"),
             _daily_paths(m, "slv"),
+            _daily_paths(m, "lnd"),
             year,
             m,
             str(out_dir),
@@ -225,7 +232,7 @@ def run_pipeline(
             pool.submit(
                 _transform_export_one, *a, skip_existing=resume,
                 cleanup=cleanup,
-            ): a[3]
+            ): a[4]  # month (index shifted by the new lnd_paths arg)
             for a in job_args
         }
         for fut in as_completed(futures):

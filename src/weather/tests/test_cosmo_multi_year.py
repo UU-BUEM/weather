@@ -89,11 +89,9 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Path bootstrap — allows running without a prior `pip install -e .`
-# ---------------------------------------------------------------------------
+from weather.settings import EnvSettings
+
 _here = Path(__file__).resolve().parent   # src/weather/tests/
-_src = _here.parent.parent               # src/
 _TEST_ONE_YEAR = _here / "test_cosmo_one_year.py"
 
 logging.basicConfig(
@@ -176,12 +174,17 @@ def _parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
-        "--from-year", type=int, default=1995, metavar="YEAR",
-        help="First year to process",
+        "--from-year", type=int, default=EnvSettings.cosmo_from_year(),
+        metavar="YEAR",
+        help="First year to process (default: COSMO_FROM_YEAR env var or 1995)",
     )
     p.add_argument(
-        "--to-year", type=int, default=2018, metavar="YEAR",
-        help="Last year to process (inclusive)",
+        "--to-year", type=int, default=EnvSettings.cosmo_to_year(),
+        metavar="YEAR",
+        help=(
+            "Last year to process, inclusive "
+            "(default: COSMO_TO_YEAR env var or 2018)"
+        ),
     )
     p.add_argument(
         "--ncores", type=int, default=None, metavar="N",
@@ -223,7 +226,8 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--no-cleanup", action="store_true",
-        help="Keep intermediate files",
+        default=not EnvSettings.cosmo_cleanup(),
+        help="Keep intermediate files (default: keep, via COSMO_CLEANUP)",
     )
     return p.parse_args()
 
