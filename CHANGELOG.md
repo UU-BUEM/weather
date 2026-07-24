@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-07-24
+
+### Fixed
+
+- **`geo/crop.py`**: `crop_netcdf()` failed on every invocation against
+  a real `cdo` binary (first live-tested in GitHub Actions CI, not on
+  this dev machine — `cdo` has no win-64 conda-forge build).
+  `tempfile.mkstemp()` pre-creates the output tmp file, and `cdo`
+  refuses to overwrite an existing output file by default — added `-O`
+  to the `cdo sellonlatbox` invocation. Also stopped swallowing `cdo`'s
+  stderr (`capture_output=True` + `check=True` discarded it, so the CI
+  failure showed only "returned non-zero exit status 1" with no
+  diagnosable reason) — now logged via `log.error()` before raising.
+- **`tests/test_geo_countries.py`**: `test_crop_netcdf_regular_grid`'s
+  synthetic dataset now sets CF `units`/`standard_name`/`axis`
+  attributes on its `lat`/`lon` coordinates, matching what real
+  ERA5-Land/MERRA-2 exports already carry, so the fixture is
+  representative of production input.
+
+---
+
 ## [1.5.0] - 2026-07-24
 
 ### Added

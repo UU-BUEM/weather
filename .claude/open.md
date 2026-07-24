@@ -23,20 +23,17 @@
   against synthetic local NetCDF4 files, **not** a live GES DISC
   download — no network download triggered. See
   `docs/MERRA2_PIPELINE_GUIDE.md` and `.claude/merra2/merra2_context.md`.
-- [geo] DONE (code): new `src/weather/geo/` package (`countries.py`,
-  `bbox.py`, `crop.py`) + `weather geo {crop,list}` CLI — moves country
-  bbox lookup and real NetCDF cropping (`cdo sellonlatbox`) into this
-  repo so `merra2-energy-pipeline` doesn't need its own copy. Trimmed
-  from that repo's `countries.py`: no `TIMEZONES`, no German/French/
-  English alias table, no pan-Europe entry. `cdo` added to
-  `weather_env.yml`. Not live-tested against `cdo` on this machine (not
-  installed here; `ruff`/`mypy` pass, pure-logic unit tests written but
-  **not run** — this dev machine's `weather_env` has a pre-existing,
-  unrelated numpy+pytest crash on Windows, `blas_fpe_check` raising a
-  fatal exception on `import numpy` under pytest's rewrite loader,
-  reproduces even on a trivial numpy-only test and on existing
-  unmodified test files — needs investigating separately, e.g. via CI or
-  a fresh env). See the `## geo` section below for the COSMO limitation.
+- [geo] DONE (code + CI-verified): new `src/weather/geo/` package
+  (`countries.py`, `bbox.py`, `crop.py`) + `weather geo {crop,list}`
+  CLI — moves country bbox lookup and real NetCDF cropping (`cdo
+  sellonlatbox`) into this repo so `merra2-energy-pipeline` doesn't need
+  its own copy. Trimmed from that repo's `countries.py`: no
+  `TIMEZONES`, no German/French/English alias table, no pan-Europe
+  entry. `cdo` added to `weather_env.yml` (no win-64 conda-forge build,
+  so still can't be exercised on this dev machine — first real `cdo`
+  run happened in CI, which caught a real bug, see
+  `.claude/resolved.md`'s `## geo` section). See the `## geo` section
+  below for the still-open COSMO limitation.
 
 ## geo
 - [geo] COSMO-REA6 cannot be cropped by `weather.geo.crop` yet: its
@@ -49,9 +46,6 @@
   `cdo` can crop the rotated grid directly) — deliberately not attempted
   as part of the `geo/` submodule to avoid scope creep on an unrelated
   pipeline.
-- [geo] `weather_env`'s local pytest crash (see above) blocked running
-  `test_geo_countries.py` on this dev machine — re-run once that's fixed
-  or via CI.
 
 ## era5_land
 - [era5_land] Bulk 1950–2025 run not yet executed — see plan checklist.

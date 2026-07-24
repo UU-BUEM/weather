@@ -44,3 +44,13 @@ Do not re-raise. "BY-DESIGN" are deliberate choices.
 - setuptools-scm `_version.py` must stay git-ignored (tracking broke CI).
 - Design: template-method base classes + DICT attribute registries +
   common/ utils. Keep it.
+
+## geo — fixed bugs
+
+- crop_netcdf() always failed against real cdo (first live-tested in CI,
+  not on this dev machine — cdo has no win-64 conda-forge build): mkstemp
+  pre-creates the output tmp file, and cdo refuses to overwrite an
+  existing file by default → added `-O` to the cdo invocation. Also added
+  `log.error(stderr)` before raising (previously swallowed via
+  `capture_output=True` + `check=True`, so the CI failure showed only
+  "returned non-zero exit status 1" with no diagnosable reason).

@@ -85,6 +85,15 @@ def test_crop_netcdf_regular_grid(tmp_path: Path):
         {"T": (("lat", "lon"), data)},
         coords={"lat": lat, "lon": lon},
     )
+    # CDO only recognises this as a lonlat grid (not "generic") with CF
+    # axis/units attrs on the coordinate variables -- real ERA5-Land/MERRA-2
+    # exports carry these already, so set them explicitly here too.
+    ds["lat"].attrs = {
+        "units": "degrees_north", "standard_name": "latitude", "axis": "Y"
+    }
+    ds["lon"].attrs = {
+        "units": "degrees_east", "standard_name": "longitude", "axis": "X"
+    }
     input_path = tmp_path / "synthetic.nc"
     output_path = tmp_path / "synthetic_cropped.nc"
     ds.to_netcdf(input_path)

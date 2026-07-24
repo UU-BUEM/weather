@@ -106,6 +106,7 @@ def crop_netcdf(
 
     args = [
         "cdo",
+        "-O",  # tmp_path already exists (mkstemp reserved it) -- force overwrite
         "-L",
         f"sellonlatbox,{west},{east},{south},{north}",
         str(input_path),
@@ -116,7 +117,12 @@ def crop_netcdf(
         input_path.name, west, east, south, north,
     )
     try:
-        subprocess.run(args, capture_output=True, check=True, text=True)
+        result = subprocess.run(args, capture_output=True, text=True)
+        if result.returncode != 0:
+            log.error("cdo failed (exit %d): %s", result.returncode, result.stderr.strip())
+            raise subprocess.CalledProcessError(
+                result.returncode, args, output=result.stdout, stderr=result.stderr
+            )
         Path(tmp_path).replace(output_path)
     except BaseException:
         Path(tmp_path).unlink(missing_ok=True)
