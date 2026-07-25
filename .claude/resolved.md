@@ -45,6 +45,37 @@ Do not re-raise. "BY-DESIGN" are deliberate choices.
 - Design: template-method base classes + DICT attribute registries +
   common/ utils. Keep it.
 
+## merra2 — fixed bugs
+
+- Full 1980-2025 bulk run (`test_merra2_multi_year.py`, 2026-07-24) failed
+  exactly 2 of 46 years: 2020 and 2021 (`exit code 1`), all other 44 years
+  OK. Root cause: `downloader.py`'s `_stream_prefix(year)` hardcodes a
+  single GES DISC "stream" number (400) for the whole 2011-9999 range, but
+  NASA occasionally reprocesses individual months under a bumped runid
+  (401) — confirmed from the run's log: September 2020 and June-September
+  2021 all 404 under stream 400 (verified these are the *only* affected
+  months; every other 2020/2021 month, and all of 2022+, fetched fine
+  under 400). The 404 (`requests.HTTPError`, a subclass of `OSError`) was
+  also being caught by `exponential_backoff(exceptions=(OSError,))` and
+  retried 5 times before finally propagating — wasted ~20s per file on a
+  permanent failure with no chance of succeeding. Fixed: `_fetch` now
+  tries `(primary, primary + 1)` stream candidates per file, using a new
+  `_StreamNotFound` (plain `Exception`, not `OSError`) to skip the
+  useless backoff retries and fall straight to the next candidate on a
+  404; transient errors (503, timeouts) still retry against the same
+  stream as before. `build_url()` gained an optional `stream` param to
+  support this. Deliberately NOT hardcoding "Sep 2020 + Jun-Sep 2021" as
+  a date range in `_STREAM_RANGES` — GES DISC's reprocessing windows are
+  reported as scattered/non-contiguous (see the Earthdata Forum thread
+  "Differences in file names in certain waves of MERRA 2"), so a fallback
+  is the only approach that survives the *next* reprocessed wave too.
+  **Verified live** (2026-07-25): re-ran 2020/2021 alone against the
+  fixed downloader — both completed clean. Full 1980-2025 archive
+  (46/46 years, 552 monthly files) now complete; a `verify_merra2_months
+  .py` pass over the full `output/` dir (esp. the 2019->2020,
+  2020->2021, 2021->2022 boundaries) is the one remaining check, see
+  `.claude/merra2/merra2_plan.md`.
+
 ## geo — fixed bugs
 
 - crop_netcdf() always failed against real cdo (first live-tested in CI,

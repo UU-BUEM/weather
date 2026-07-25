@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-07-26
+
+### Fixed
+
+- **`providers/merra2/downloader.py`**: the full 1980-2025 bulk run
+  (552 monthly files) failed exactly 2 of 46 years — 2020 and 2021 —
+  on a GES DISC 404. Root cause: `_stream_prefix(year)` hardcodes a
+  single "stream" number for the whole 2011-9999 range, but NASA
+  reprocessed September 2020 and June-September 2021 under stream 401
+  instead of 400. `_fetch` now tries `(primary, primary + 1)` per file,
+  using a new `_StreamNotFound` exception (not `OSError`) to skip
+  straight to the next stream on a 404 instead of burning 5 backoff
+  retries on a permanent failure; transient errors (503, timeouts)
+  still retry against the same stream as before. Deliberately not
+  hardcoding the affected months as a date range, since GES DISC's
+  reprocessing windows are scattered, not contiguous. Verified live:
+  re-ran 2020/2021 alone against the fixed downloader, both completed
+  clean; the full 46/46-year archive is now verified continuous
+  end-to-end via `verify_merra2_months.py` (every year boundary).
+
+### Changed
+
+- **`tests/verify_merra2_months.py`**: widened the `T2M` plausibility
+  range from `(-40, 45)` to `(-55, 55)` degC after the full 46-year
+  run — the Europe box spans 34N (Saharan margin) to 72N (Arctic
+  Scandinavia/Kola), so `-51.09`/`51.72` over 46 years is real climate,
+  not corrupted data.
+- **`CLAUDE.md`** / **`.claude/merra2/merra2_plan.md`** /
+  **`.claude/open.md`** / **`.claude/resolved.md`**: updated to record
+  the full 1980-2025 MERRA-2 archive verification and the
+  `percentile_index.py` run against the full 46-year archive (36
+  output files, genuine per-cell `source_year` diversity: P50 45-46/46
+  years per month, P10/P90 32-43/46).
+- **`.gitignore`**: added `*_bulk_*.log` (bulk-run scripts can write
+  their log outside `data/` if `*_WORK_DIR` isn't set).
+
+---
+
 ## [1.5.1] - 2026-07-24
 
 ### Fixed

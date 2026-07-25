@@ -223,16 +223,37 @@ same as noted for ERA5-Land/COSMO at the top of `CLAUDE.md`).
   and a docstring note that MERRA-2 needs **no boundary-repair
   prerequisite** (GHI is instantaneous, not accumulated, so there's no
   ERA5-Land-style first-timestamp artifact to fix before summing daily
-  GHI). Smoke-tested end-to-end against the full 2018 output
-  (`python -m weather.providers.merra2.percentile_index --source-dir
-  data/merra2/output --target-dir <tmp>`) — completed cleanly, wrote
-  36 valid files, `source_year` correctly `[2018]` everywhere (the only
-  possible answer with a single year of data; real percentile
-  separation needs multiple years). Deleted the test output afterward —
-  regenerate for real once enough years exist.
+  GHI).
+  **DONE, verified live against the full 1980-2025 archive**
+  (2026-07-25/26, `/data/soma/merra2/output` -> `/data/soma/merra2/
+  output/percentile`, 46 years/552 monthly files as input): completed
+  cleanly, wrote all 36 output files
+  (`merra2_{p10,p50,p90}_{01..12}_all_attrs.nc`). Verified genuine
+  (non-degenerate) percentile separation by reading each file's
+  `source_year` variable directly (the tmux session running the job was
+  killed before the terminal log could be captured, so this was
+  confirmed via the output NetCDFs themselves rather than the run log):
+  `P50` picks from 45-46 of the 46 available years per month (i.e. the
+  median is genuinely cell-by-cell across nearly the whole record, not
+  dominated by a handful of years); `P10`/`P90` pick from 32-43 unique
+  years per month — narrower than P50 (expected: tail thresholds pull
+  more consistently toward genuinely extreme years for a given cell)
+  but still spanning the full 1980-2025 range, not collapsed onto one
+  or two years. Contrast with the earlier 2018-only smoke test, where
+  `source_year` was trivially `[2018]` everywhere (the only possible
+  answer with one year of data) — this run is the first real evidence
+  the KS-distance logic behaves correctly at production scale.
   **Run as a module**, not a script (`python -m
   weather.providers.merra2.percentile_index`), since it uses relative
   imports (`from ...settings import EnvSettings`) — same as ERA5-Land's.
+  Also surfaced (not a code bug, an ops one): `.env`'s `WEATHER_DATA_DIR`
+  had been mistakenly set to `/data` instead of `/data/soma` since the
+  2026-07-24 bulk run, so every pipeline invocation that day (and the
+  2020/2021 rerun) kept re-deriving `/data/merra2/...` and re-populating
+  it, even after manually moving files out to `/data/soma/merra2/...`
+  twice — moving files doesn't fix a wrong `.env` value. Fixed by
+  correcting `.env` directly and consolidating the stray `/data/merra2/
+  download` leftovers into `/data/soma/merra2/download`.
 - **`dni_pointwise.py`**: point-wise DNI/DHI decomposition (pvlib
   DIRINT/DISC + NREL SPA solar position), identical logic to
   `era5_land.dni_pointwise` — MERRA-2's `PS` (Pa) maps directly onto
@@ -276,6 +297,34 @@ same as noted for ERA5-Land/COSMO at the top of `CLAUDE.md`).
 3. Benchmark `opendap_max_concurrent`/`ncores` empirically once real
    runs happen; update `CLAUDE.md`'s provider table (currently `TBD`)
    accordingly.
+4. DONE (2026-07-25): re-ran 2020/2021 alone (`--from-year 2020
+   --to-year 2021 --ncores 88`) against the fixed `downloader.py` — both
+   completed clean (`[done] year 2020 OK`, `[done] year 2021 OK`, 923.5s
+   total). Full 1980-2025 archive (46/46 years, 552 monthly files) is now
+   complete and `verify_merra2_months.py` over the whole `output/` dir
+   confirms it: "All months OK: correct hour counts, HH:30 span, no
+   gaps" across every boundary, including 2019->2020, 2020->2021, and
+   2021->2022. `T2M`'s plausible range widened (-40,45) -> (-55,55) —
+   see below.
+
+## Full 1980-2025 bulk run (2026-07-24)
+
+`test_merra2_multi_year.py --from-year 1980 --to-year 2025 --ncores 88`,
+~5.6 h wall time. 44/46 years OK; 2020 and 2021 failed — see the
+stream-401 bug writeup in `.claude/resolved.md`. `verify_merra2_months.py`
+over the 44 completed years' 528 monthly files: hour counts, `HH:30` span,
+and month/year continuity all OK; the aggregated NaN/min-max table flags
+`PS` (min 73.2 kPa, below the `[85000, 108000]` sanity range) and `T2M`
+(range -51.1..51.7 degC, outside `[-40, 45]`) as `OUT-OF-RANGE` — **not
+new bugs**, same phenomena already documented from the single-year 2018
+check (`merra2_context.md`'s Alps low-pressure cell and Sahara-margin
+heat), just wider extremes from 44 years of data instead of 1 (confirmed
+unchanged after the 2020/2021 rerun completed the archive: identical
+-51.09/51.72 min/max). `PS` left as-is (already documented, loose sanity
+net by design). `T2M`'s range widened to `(-55, 55)` since it's tight
+enough that a plausible next-decade extreme could trip it again
+otherwise — the box's 34N-72N span makes both ends physically real, not
+worth re-litigating on every future run.
 
 ## Conventions enforced
 

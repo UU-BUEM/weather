@@ -49,7 +49,11 @@ _PLAUSIBLE_RANGE: dict[str, tuple[float, float]] = {
     "ALBEDO": (0.0, 1.0),
     "PS": (85000.0, 108000.0),  # Pa; ERA5-Land-comparable surface range
     "QV2M": (0.0, 0.030),  # kg/kg
-    "T2M": (-40.0, 45.0),  # degC (already converted)
+    # degC (already converted). Widened from (-40, 45) after the full
+    # 1980-2025 run: the Europe box spans 34N (Saharan margin) to 72N
+    # (Arctic Scandinavia/Kola), so -51.09/51.72 over 46 years is real
+    # climate, not corrupted data -- same rationale as the PS/Alps case.
+    "T2M": (-55.0, 55.0),
     "U10M": (-45.0, 45.0),  # m/s
     "U2M": (-45.0, 45.0),
     "V10M": (-45.0, 45.0),

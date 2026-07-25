@@ -14,6 +14,17 @@
   `xr.merge`), multi-month export deadlock fixed (dask threaded-write
   lock contention — `export.py` now computes each var before
   `to_netcdf()`, matching ERA5-Land). See .claude/merra2/merra2_plan.md.
+- [merra2] DONE: Full 1980-2025 bulk run (2026-07-24). 44/46 years OK
+  first pass; 2020 and 2021 failed on a GES DISC stream-number 404 (NASA
+  reprocessed Sep 2020 and Jun-Sep 2021 under runid 401 instead of 400),
+  fixed in `downloader.py` (stream fallback, see `.claude/resolved.md`),
+  re-run confirmed both years OK. Full archive (46/46 years, 552 monthly
+  files) verified continuous end to end via `verify_merra2_months.py`.
+  See `.claude/merra2/merra2_plan.md`.
+- [merra2] DONE: percentile indexer (`percentile_index.py`) run for real
+  against the full 46-year archive (2026-07-25/26) — all 36 output files
+  written, `source_year` diversity confirmed genuine (P50 45-46/46
+  years per month, P10/P90 32-43/46). See `.claude/merra2/merra2_plan.md`.
 - [merra2] DONE (code): added the `lnd` collection (`M2T1NXLND`:
   `SNODP`, `PRECSNOLAND`) and `U50M`/`V50M` (free within the existing
   `slv` collection) — needed by a confirmed downstream consumer

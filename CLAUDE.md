@@ -12,20 +12,27 @@ changes (same commit).
    BasePercentileAnalyzer` is dead code, superseded in commit `17d5eea`).
    Still needs a live smoke test AFTER bulk run + boundary repair.
    → `.claude/era5_land/era5_land_percentile_plan.md`
-2. **MERRA-2 end-to-end verification** — DONE. Full 2018 (12 months) run
-   against real GES DISC data, verified via `tests/verify_merra2_months.py`
-   (hour counts, `HH:30` span, cross-month continuity, NaN/min-max
-   plausibility). Two real bugs found and fixed along the way: stale
+2. **MERRA-2 end-to-end verification** — DONE. Full 1980-2025 archive
+   (46 years, 552 monthly files) run against real GES DISC data,
+   verified via `tests/verify_merra2_months.py` (hour counts, `HH:30`
+   span, cross-month/cross-year continuity incl. every year boundary,
+   NaN/min-max plausibility). Bugs found and fixed along the way: stale
    raw GES DISC global attrs leaking through `xr.merge` (now cleared in
-   `transform.py`), and a multi-month `ProcessPoolExecutor` export
-   deadlock (dask threaded-write lock contention — `export.py` now
-   computes each variable before `to_netcdf()`, matching ERA5-Land).
+   `transform.py`); a multi-month `ProcessPoolExecutor` export deadlock
+   (dask threaded-write lock contention — `export.py` now computes each
+   variable before `to_netcdf()`, matching ERA5-Land); and a GES DISC
+   stream-number 404 (NASA reprocessed Sep 2020 + Jun-Sep 2021 under
+   runid 401 instead of 400 — `downloader.py` now falls back to the
+   next stream on a 404 instead of hardcoding one runid per year range).
    → `.claude/merra2/merra2_plan.md`
-3. **MERRA-2 percentile / dni_pointwise** — DONE (code).
-   `providers/merra2/percentile_index.py` mirrors ERA5-Land/COSMO's
-   KS-distance approach; `providers/merra2/dni_pointwise.py` mirrors
-   ERA5-Land's point-wise DNI/DHI helper. Both smoke-tested against
-   real 2018 data. Also found + fixed a real cross-provider bug in
+3. **MERRA-2 percentile / dni_pointwise** — DONE. `providers/merra2/
+   percentile_index.py` mirrors ERA5-Land/COSMO's KS-distance approach;
+   `providers/merra2/dni_pointwise.py` mirrors ERA5-Land's point-wise
+   DNI/DHI helper. `percentile_index.py` run for real against the full
+   46-year archive (not just a 2018 smoke test): 36 output files, genuine
+   per-cell `source_year` diversity confirmed (P50 45-46/46 years per
+   month, P10/P90 32-43/46). `dni_pointwise.py` still only smoke-tested
+   against 2018. Also found + fixed a real cross-provider bug in
    `dni_pointwise.py` (both providers): a tz-naive/tz-aware pressure
    index mismatch on `.reindex()` silently produced all-NaN pressure ->
    all-NaN airmass -> DNI always exactly 0, no exception raised. Fixed

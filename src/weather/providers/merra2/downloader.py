@@ -79,13 +79,25 @@ _PRODUCT_TOKEN = {
 
 #: MERRA-2 "stream" number prefix by date range (fixed by NASA's naming;
 #: see https://disc.gsfc.nasa.gov/information/glossary?title=
-#: MERRA-2%20File%20Naming%20Conventions).
+#: MERRA-2%20File%20Naming%20Conventions). NASA occasionally reprocesses
+#: a handful of months under a bumped runid (confirmed live: Sep 2020 and
+#: Jun-Sep 2021 are served as stream 401, not 400) -- these reprocessed
+#: windows are scattered, not a clean date range, so ``_fetch`` falls back
+#: from this primary stream to ``primary + 1`` on a 404 instead of trying
+#: to hardcode the affected months here.
 _STREAM_RANGES: tuple[tuple[int, int, int], ...] = (
     (1980, 1991, 100),
     (1992, 2000, 200),
     (2001, 2010, 300),
     (2011, 9999, 400),
 )
+
+
+class _StreamNotFound(Exception):
+    """Raised when a MERRA-2 stream candidate 404s (plain Exception, not
+    OSError, so :func:`~weather.common.net.exponential_backoff` won't
+    burn retries on what is a permanent, not transient, failure)."""
+
 
 #: MERRA-2's fixed global grid (0.5 deg lat x 0.625 deg lon, origin at
 #: the South-West corner, -90/-180).
@@ -191,15 +203,23 @@ class Merra2Downloader(BaseDownloader):
             )
         return self._session
 
-    def build_url(self, job: Merra2DownloadJob) -> str:
+    def build_url(self, job: Merra2DownloadJob, stream: int | None = None) -> str:
         """Return the full OPeNDAP constraint URL for *job*.
 
         Pure string/index math — no network I/O — so it can be
         unit-tested and inspected without Earthdata credentials.
+
+        Parameters
+        ----------
+        stream : int | None
+            Explicit MERRA-2 stream number, overriding the year-derived
+            default (see :func:`_stream_prefix`) — used by :meth:`_fetch`
+            to retry a reprocessed-month 404 under the next stream.
         """
         collection_id = COLLECTIONS[job.collection]
         product = _PRODUCT_TOKEN[job.collection]
-        stream = _stream_prefix(job.year)
+        if stream is None:
+            stream = _stream_prefix(job.year)
         date_str = f"{job.year}{job.month:02d}{job.day:02d}"
         filename = f"MERRA2_{stream}.{product}.{date_str}.nc4"
 
@@ -266,17 +286,30 @@ class Merra2Downloader(BaseDownloader):
     def _fetch(  # type: ignore[override]
         self, job: Merra2DownloadJob,
     ) -> Path:
-        """Download *job* via an authenticated, redirect-safe session."""
+        """Download *job* via an authenticated, redirect-safe session.
+
+        Tries the year's primary stream first, falling back to the next
+        stream number on a 404 (see :data:`_STREAM_RANGES`'s docstring —
+        NASA sometimes reprocesses a month under a bumped runid). A 404
+        is treated as immediately-fatal-for-this-stream (via
+        :class:`_StreamNotFound`, not ``OSError``) so it moves to the next
+        candidate right away instead of burning 5 backoff retries on a
+        permanent failure; transient errors (503, timeouts, ...) still
+        retry against the same stream as before.
+        """
         dest = self.local_path(job)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        url = self.build_url(job)
         session = self._get_session()
+        primary = _stream_prefix(job.year)
+        candidates = (primary, primary + 1)
 
         @exponential_backoff(max_attempts=5, exceptions=(OSError,))
-        def _download() -> Path:
+        def _download(url: str) -> Path:
             tmp = dest.with_suffix(dest.suffix + ".part")
             logger.info("Fetching %s -> %s", job, dest.name)
             with session.get(url, stream=True, timeout=(10, 300)) as resp:
+                if resp.status_code == 404:
+                    raise _StreamNotFound(url)
                 resp.raise_for_status()
                 with open(tmp, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=1 << 20):
@@ -288,4 +321,18 @@ class Merra2Downloader(BaseDownloader):
             tmp.replace(dest)
             return dest
 
-        return _download()
+        for i, stream in enumerate(candidates):
+            url = self.build_url(job, stream=stream)
+            try:
+                return _download(url)
+            except _StreamNotFound:
+                if i == len(candidates) - 1:
+                    raise OSError(
+                        f"No MERRA-2 stream found for {job} "
+                        f"(tried streams {candidates})"
+                    ) from None
+                logger.info(
+                    "%s: stream %d not found (404), retrying as stream %d",
+                    job, stream, candidates[i + 1],
+                )
+        raise AssertionError("unreachable")  # pragma: no cover

@@ -25,6 +25,7 @@ data/
 *.grb
 *.grb.bz2
 *.part
+*_bulk_*.log
 
 # Environments / virtualenvs
 .venv/
