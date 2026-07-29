@@ -1,7 +1,6 @@
 import os
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 
@@ -106,43 +105,24 @@ class CsvWeatherData:
             Copy of self.df with DNI and DHI columns replaced
             by DISC-derived values.
         """
-        import pvlib  # type: ignore[import-untyped]
+        from .common.dni_reconstruction import reconstruct_dni_dhi
 
         if self.df is None:
             raise ValueError("Data not loaded. Call _load_and_prepare first.")
         if "GHI" not in self.df.columns:
             raise ValueError("GHI column required for DNI reconstruction.")
 
-        solpos = pvlib.solarposition.get_solarposition(
-            self.df.index, latitude, longitude
-        )
-        dni_extra = pvlib.irradiance.get_extra_radiation(
-            self.df.index.dayofyear
-        )
-
-        # DISC: empirical decomposition of GHI into DNI
-        # (Iqbal 1983, pvlib implementation)
-        disc_result = pvlib.irradiance.disc(
-            ghi=self.df["GHI"],
-            solar_zenith=solpos["apparent_zenith"],
-            datetime_or_doy=self.df.index,
-        )
-        # Hard physical upper-bound: DNI <= extraterrestrial irradiance
-        dni_disc = (
-            disc_result["dni"].clip(lower=0, upper=dni_extra).fillna(0)
-        )
-
-        # Back-compute DHI = GHI - DNI * cos(zenith), bounded to [0, GHI]
-        cos_z = np.cos(
-            np.radians(solpos["apparent_zenith"].clip(upper=90))
-        ).clip(lower=0)
-        dhi_derived = (
-            (self.df["GHI"] - dni_disc * cos_z)
-            .clip(lower=0, upper=self.df["GHI"])
-            .fillna(0)
+        result = reconstruct_dni_dhi(
+            self.df["GHI"],
+            latitude,
+            longitude,
+            method="disc",
+            zenith_kind="apparent",
+            clip_to_extraterrestrial=True,
+            clip_dhi_to_ghi=True,
         )
 
         df_out = self.df.copy()
-        df_out["DNI"] = dni_disc
-        df_out["DHI"] = dhi_derived
+        df_out["DNI"] = result["DNI"].reindex(df_out.index).fillna(0)
+        df_out["DHI"] = result["DHI"].reindex(df_out.index).fillna(0)
         return df_out

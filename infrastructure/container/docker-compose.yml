@@ -67,7 +67,7 @@ x-cosmo-base: &cosmo-base
     COSMO_SKIP_DOWNLOAD:   ${COSMO_SKIP_DOWNLOAD:-0}
     COSMO_SKIP_DECOMPRESS: ${COSMO_SKIP_DECOMPRESS:-0}
     COSMO_SKIP_DNI:        ${COSMO_SKIP_DNI:-0}
-    COSMO_NO_CLEANUP:      ${COSMO_NO_CLEANUP:-0}
+    COSMO_CLEANUP:         ${COSMO_CLEANUP:-false}
   env_file:
     - path: ../../.env
       required: false
@@ -100,7 +100,7 @@ services:
       COSMO_SKIP_DOWNLOAD:   ${COSMO_SKIP_DOWNLOAD:-0}
       COSMO_SKIP_DECOMPRESS: ${COSMO_SKIP_DECOMPRESS:-0}
       COSMO_SKIP_DNI:        ${COSMO_SKIP_DNI:-0}
-      COSMO_NO_CLEANUP:      ${COSMO_NO_CLEANUP:-0}
+      COSMO_CLEANUP:         ${COSMO_CLEANUP:-false}
 
   # ── Multi-year COSMO-REA6 pipeline (1995–2018) ───────────────────────────
   cosmo-rea6-multi:
@@ -118,7 +118,7 @@ services:
       COSMO_SKIP_DOWNLOAD:   ${COSMO_SKIP_DOWNLOAD:-0}
       COSMO_SKIP_DECOMPRESS: ${COSMO_SKIP_DECOMPRESS:-0}
       COSMO_SKIP_DNI:        ${COSMO_SKIP_DNI:-0}
-      COSMO_NO_CLEANUP:      ${COSMO_NO_CLEANUP:-0}
+      COSMO_CLEANUP:         ${COSMO_CLEANUP:-false}
 
   # ── Post-processing: merge monthly → annual NC ───────────────────────────
   cosmo-rea6-merge:

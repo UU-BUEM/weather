@@ -28,57 +28,33 @@ separate infrastructure folders for environment and container assets.
 weather/
 ├── src/                           # Python package (src-layout standard)
 │   └── weather/
-│       ├── common/
-│       │   ├── __init__.py
-│       │   ├── cleanup.py
-│       │   ├── decompress.py
-|       |   ├── derived_attributes.py
-│       │   ├── download.py
-|       |   ├── env.py
-|       |   ├── merge.py
-|       |   ├── parallel.py
-|       |   ├── percentile_poe.py
-│       │   ├── percentile.py
-│       │   └── validate.py
+│       ├── common/                # shared, provider-agnostic mechanics
+│       │   ├── derived_attributes.py   # shared GHI/DHI/DNI/RH/WS formulas
+│       │   ├── dni_reconstruction.py   # shared pvlib DIRINT/DISC decomposition
+│       │   ├── geo_lookup.py           # nearest-cell lookup (COSMO's grid)
+│       │   ├── cli_flags.py            # shared --cleanup/--resume/... flags
+│       │   ├── solar_position.py  download.py  decompress.py  parallel.py
+│       │   └── merge.py  percentile.py  net.py  validate.py  cleanup.py  env.py
+│       ├── geo/                   # country bbox + NetCDF cropping (`weather geo`)
+│       │   └── bbox.py  countries.py  crop.py  __init__.py
 │       ├── providers/
-│       │   ├── __init__.py
-|       |   ├── base_decompressor.py
-|       |   ├── base_downloader.py
-|       |   ├── base_percentile.py
-│       │   ├── base.py
-│       │   ├── cosmo_rea6/
-│       │   │   ├── __init__.py
-│       │   │   ├── config.py
-│       │   │   ├── download.py
-│       │   │   ├── decompress.py
-│       │   │   ├── transform.py
-│       │   │   ├── export.py
-│       │   │   └── pipeline.py
-│       │   ├── merra2/
-│       │   │   ├── __init__.py
-|       |   |   ├── config.py
-|       |   |   ├── downloaded_attributes.py
-|       |   |   └── downloader.py
-│       │   └── era5_land/
-│       │       ├── __init__.py
-|       |       ├── config.py
-|       |       ├── downloaded_attributes.py
-|       |       └──downloader.py
-|       ├── tests/
-|       |   ├── test_derived_attributes.py
-|       |   ├── test_cosmo_multi_year.py
-|       |   ├── test_cosmo_one_month.py
-|       |   ├── test_cosmo_one_year.py
-|       |   ├── test_percentile_poe.py
-|       |   ├── test_percentile.py
-|       |   ├── test_pipeline_integration.py
-|       |   └── test_validation.py
-│       ├── __init__.py
+│       │   ├── base.py  base_downloader.py  base_decompressor.py  base_percentile.py
+│       │   ├── cosmo_rea6/        # config, download(er), decompress(or),
+│       │   │                      # transform, export, pipeline, percentile_index
+│       │   ├── merra2/            # same module roles as cosmo_rea6
+│       │   └── era5_land/         # same module roles as cosmo_rea6
+│       ├── tests/                 # pytest units + pipeline-runner CLI scripts
+│       │   ├── test_derived_attributes.py  test_validation.py
+│       │   ├── test_pipeline_integration.py  test_point_query.py
+│       │   ├── test_geo_countries.py  compare_providers.py
+│       │   ├── test_{cosmo,era5,merra2}_{one_month,one_year,multi_year}.py
+│       │   └── (see src/weather/tests/README.md for the full catalog)
+│       ├── __init__.py            # re-exports get_point_weather
+│       ├── point_query.py         # get_point_weather(lat, lon, year, provider=...)
 │       ├── __main__.py
-│       ├── _version.py
 │       ├── cli.py
-│       ├── from_csv.py 
-|       ├── registry.py 
+│       ├── from_csv.py
+│       ├── registry.py
 │       └── settings.py
 ├── infrastructure/
 │   ├── env/
@@ -116,9 +92,9 @@ weather/
 
 ## Provider Model
 
-- `cosmo-rea6`: implemented
-- `merra-2`: scaffolded
-- `era5-land`: scaffolded
+- `cosmo-rea6`: implemented (reference provider)
+- `merra-2`: implemented
+- `era5-land`: implemented
 
 Naming recommendation:
 
@@ -169,44 +145,58 @@ weather validate
 weather run --provider cosmo-rea6 --months 1
 ```
 
-The pipeline for single year and multi-year is also ready now.
-For executing this, the following test files need to be executed.
+The pipeline for single-month, single-year, and multi-year runs is ready
+for all three providers (`cosmo-rea6`, `era5-land`, `merra-2`). Each
+provider has the same three CLI runners under `src/weather/tests/`:
 
 ```bash
-python ./src/weather/tests/test_cosmo_one_year.py
+python ./src/weather/tests/test_cosmo_one_month.py --year 2018 --month 1
+python ./src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 80
+python ./src/weather/tests/test_cosmo_multi_year.py --from-year 1995 --to-year 2018
 ```
 
-with the following flags:
-
-```text
-  --year (default: 2018)
-  --months (default: None)
-  --ncores
-  ...
-```
-
-and
-
-```bash
-python ./src/weather/tests/test_cosmo_multi_year.py
-```
-
-with the following flags:
-
-```text
-  --from-year (default: 1995)
-  --to-year (inclusive) (default: 2018)
-  --ncores
-  ...
-```
-
-The rest can be checked with `--help` or `-h`
+(swap `cosmo` for `era5`/`merra2` for the other two providers). Common
+flags: `--work-dir`, `--ncores`, `--skip-download`, `--resume` (skip
+periods whose output already exists), `--cleanup` (delete intermediates
+after a successful export — default is to keep everything unless the
+provider's `*_CLEANUP` env var is set). Full reference: `--help`; see
+`src/weather/tests/README.md` for the complete catalog.
 
 Default provider can be set with:
 
 ```bash
 export WEATHER_PROVIDER=cosmo-rea6
 ```
+
+## Point-query API (for downstream consumers)
+
+For a downstream package (e.g. `buem`) that just needs hourly weather at
+one building/location — not the full download/transform pipeline —
+`weather.get_point_weather()` reads an already-processed provider
+archive directly:
+
+```python
+from weather import get_point_weather
+
+df = get_point_weather(52.0, 5.0, 2018, provider="era5-land")
+# df: hourly DatetimeIndex, columns T (degC), GHI/DHI/DNI (W/m2)
+```
+
+Install just enough for this (no GRIB/download stack): `pip install
+weather[pointquery,solar]`. Requires a provider archive that's already
+been produced by a normal pipeline run for that `(provider, year)`.
+
+## Country cropping (`weather geo`)
+
+```bash
+weather geo list
+weather geo crop --input ERA5_LAND_2018_all_attrs.nc \
+    --output ERA5_LAND_2018_netherlands.nc --country netherlands
+```
+
+Crops an already-exported ERA5-Land/MERRA-2 NetCDF to a country's
+bounding box via `cdo sellonlatbox`. Not yet supported for COSMO-REA6
+output on `cdo`-side cropping; see `CLAUDE.md` for the current status.
 
 ## Shell Script Paths
 
@@ -257,6 +247,6 @@ bash scripts/build_container.sh def
 
 ## Notes
 
-- COSMO-REA6 is production-ready in this structure.
-- MERRA-2 and ERA5-Land have package directories ready for implementation.
+- All three providers (COSMO-REA6, ERA5-Land, MERRA-2) are implemented
+  and share the same module roles / pipeline shape.
 - New provider-specific modules should be added under `src/weather/providers/<provider_name>/`.

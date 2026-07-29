@@ -59,7 +59,7 @@ Execution order for a complete dataset:
 
 | File | Purpose |
 | --- | --- |
-| `test_cosmo_one_month.py` | Download + decompress + transform 1 month of all 5 attributes |
+| `test_cosmo_one_month.py` | Download + decompress + transform 1 month of all 10 registered attributes |
 | `test_cosmo_one_year.py` | Full-year pipeline; produces 12 monthly NCs |
 | `test_cosmo_multi_year.py` | Delegates to `test_cosmo_one_year.py` per year, optionally via `ThreadPoolExecutor` |
 
@@ -70,7 +70,7 @@ python src/weather/tests/test_cosmo_multi_year.py --from-year 1995 --to-year 201
 ```
 
 Common flags: `--work-dir DIR` · `--ncores N` · `--skip-download` ·
-`--skip-decompress` · `--no-cleanup` · `--resume`. Full reference: `--help`.
+`--skip-decompress` · `--cleanup` · `--resume`. Full reference: `--help`.
 
 ---
 

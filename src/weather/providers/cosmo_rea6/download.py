@@ -119,15 +119,19 @@ def download_all(
     year: int | None = None,
     attributes: list[str] | None = None,
     *,
+    months: list[int] | None = None,
     dest_dir: Path | None = None,
     base_url: str | None = None,
+    max_workers: int | None = None,
 ) -> list[Path]:
-    """Download all GRIB files for every attribute across a full year.
+    """Download GRIB files for every attribute across one or more months.
 
-    All twelve months (January–December) are always downloaded.
     Uses :class:`~.downloader.CosmoDownloader` for per-file
     check-before-fetch and :func:`~weather.common.parallel.run_parallel`
-    for concurrent downloads.
+    for concurrent downloads. DWD OpenData is a plain static-file HTTPS
+    server (no documented rate limit, unlike CDS/GES DISC) -- worker
+    count defaults to one thread per task, capped only by *ncores*, not
+    an artificial ceiling.
 
     Parameters
     ----------
@@ -135,10 +139,14 @@ def download_all(
         Year to download (default from config: 2018).
     attributes : list[str], optional
         Attributes to download (default from config: all).
+    months : list[int], optional
+        Months to download (default: all 12).
     dest_dir : Path, optional
         Override the root download directory.
     base_url : str, optional
         Override DWD base URL.
+    max_workers : int, optional
+        Concurrent download threads (default: ``min(n_tasks, ncores)``).
 
     Returns
     -------
@@ -148,6 +156,7 @@ def download_all(
     cfg = get_config()
     year = year or cfg["year"]
     attributes = attributes or cfg["attributes"]
+    months = months or list(range(1, 13))
     if base_url is not None:
         cfg = {**cfg, "base_url": base_url}
     if dest_dir is not None:
@@ -157,9 +166,10 @@ def download_all(
     jobs = [
         DownloadJob(attribute=attr, year=year, month=m)
         for attr in attributes
-        for m in range(1, 13)
+        for m in months
     ]
-    max_workers = min(len(jobs), cfg["ncores"], 8)
+    if max_workers is None:
+        max_workers = min(len(jobs), cfg["ncores"])
     logger.info(
         "Downloading %d files with %d workers",
         len(jobs),
@@ -173,3 +183,94 @@ def download_all(
     )
     logger.info("Downloaded %d files.", len(downloaded))
     return downloaded
+
+
+def verify_downloads(
+    year: int,
+    attributes: list[str],
+    months: list[int],
+    dl_dir: Path,
+    *,
+    max_workers: int | None = None,
+) -> None:
+    """Verify every (month, attribute) ``.grb.bz2`` against DWD's Content-Length.
+
+    Checks each expected file exists, is non-empty, and (when DWD returns a
+    ``Content-Length`` header) matches the remote byte count exactly.
+    Files where DWD returns no ``Content-Length`` pass with a debug log
+    rather than failing.
+
+    Parameters
+    ----------
+    year : int
+        Target year.
+    attributes : list[str]
+        Attributes expected to have been downloaded.
+    months : list[int]
+        Months expected to have been downloaded.
+    dl_dir : Path
+        Root download directory (per-attribute subdirs).
+    max_workers : int, optional
+        Concurrent HEAD requests (default: ``min(n_tasks, 32)``).
+
+    Raises
+    ------
+    RuntimeError
+        Listing every missing or size-mismatched file.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from ...common.download import remote_size_https
+    from .naming import grib_filename, grib_url
+
+    tasks = [(m, a) for m in months for a in attributes]
+    n_exp = len(tasks)
+    if max_workers is None:
+        max_workers = min(n_exp, 32)
+    logger.info("Verifying %d bz2 file sizes against DWD ...", n_exp)
+
+    def _check(month: int, attr: str) -> tuple[str, str]:
+        fname = grib_filename(attr, year, month)
+        local = dl_dir / attr / fname
+        if not local.exists() or local.stat().st_size == 0:
+            return "missing", f"{attr}/{fname}"
+        remote_sz = remote_size_https(grib_url(attr, year, month))
+        if remote_sz is None:
+            logger.debug(
+                "no Content-Length from DWD for %s/%s -- skipped", attr, fname,
+            )
+            return "ok", ""
+        local_sz = local.stat().st_size
+        if local_sz != remote_sz:
+            return "mismatch", (
+                f"{attr}/{fname}: local={local_sz:,} B remote={remote_sz:,} B"
+            )
+        return "ok", ""
+
+    missing: list[str] = []
+    mismatches: list[str] = []
+    with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
+        futs = {pool.submit(_check, m, a): (m, a) for m, a in tasks}
+        for fut in as_completed(futs):
+            kind, msg = fut.result()
+            if kind == "missing":
+                missing.append(msg)
+            elif kind == "mismatch":
+                mismatches.append(msg)
+
+    issues: list[str] = []
+    if missing:
+        issues.append(
+            f"Missing/empty ({len(missing)}):\n"
+            + "\n".join(f"    {x}" for x in sorted(missing))
+        )
+    if mismatches:
+        issues.append(
+            f"Size mismatch ({len(mismatches)}):\n"
+            + "\n".join(f"    {x}" for x in sorted(mismatches))
+        )
+    if issues:
+        raise RuntimeError("Download verification FAILED:\n" + "\n".join(issues))
+    logger.info(
+        "Download verification OK (%d/%d files match DWD sizes)", n_exp, n_exp,
+    )

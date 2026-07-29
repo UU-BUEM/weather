@@ -21,27 +21,17 @@ class CosmoREA6Provider:
     def validate_environment(self) -> list[str]:
         return validate_cosmo_environment()
 
-    def run_pipeline(
-        self,
-        year: int | None = None,
-        attributes: list[str] | None = None,
-        *,
-        work_dir: Path | None = None,
-        output_path: Path | None = None,
-        include_wind_components: bool = True,
-        complevel: int = 1,
-        skip_download: bool = False,
-        skip_decompress: bool = False,
-        cleanup: bool = False,
-    ) -> Path:
-        return run_cosmo_pipeline(
-            year=year,
-            attributes=attributes,
-            work_dir=work_dir,
-            output_path=output_path,
-            include_wind_components=include_wind_components,
-            complevel=complevel,
-            skip_download=skip_download,
-            skip_decompress=skip_decompress,
-            cleanup=cleanup,
-        )
+    def run_pipeline(self, *args: Any, **kwargs: Any) -> Path:
+        """Run the COSMO-REA6 pipeline from generic CLI kwargs.
+
+        The shared CLI (`weather run`) may pass ``output_path`` (a single
+        combined output file) -- COSMO now always writes one NetCDF per
+        month to ``output_dir`` instead, matching
+        :class:`~weather.providers.era5_land.ERA5LandProvider` /
+        :class:`~weather.providers.merra2.MERRA2Provider`, so that kwarg
+        is absorbed/dropped here rather than forwarded blindly.
+        """
+        kwargs.pop("output_path", None)  # COSMO writes one file per month
+
+        outputs = run_cosmo_pipeline(*args, **kwargs)
+        return outputs[0] if outputs else Path()

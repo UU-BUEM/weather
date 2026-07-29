@@ -29,7 +29,13 @@
 #   COSMO_SKIP_DOWNLOAD     Set to 1 to add --skip-download flag
 #   COSMO_SKIP_DECOMPRESS   Set to 1 to add --skip-decompress flag
 #   COSMO_SKIP_DNI          Set to 1 to add --skip-dni flag
-#   COSMO_NO_CLEANUP        Set to 1 to add --no-cleanup flag
+#   COSMO_CLEANUP           Delete intermediates after export (default: false,
+#                           keep everything). Read directly by the Python
+#                           scripts' own EnvSettings.cosmo_cleanup() default --
+#                           NOT translated into a CLI flag here (unlike the
+#                           other COSMO_* vars above), so there is exactly one
+#                           place this behaves differently than a plain
+#                           passed-through env var: nowhere. Just set it.
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -42,7 +48,6 @@ _common_flags() {
     [[ "${COSMO_SKIP_DOWNLOAD:-0}" == "1" ]] && echo --skip-download
     [[ "${COSMO_SKIP_DECOMPRESS:-0}" == "1" ]] && echo --skip-decompress
     [[ "${COSMO_SKIP_DNI:-0}"      == "1" ]] && echo --skip-dni
-    [[ "${COSMO_NO_CLEANUP:-0}"    == "1" ]] && echo --no-cleanup
 }
 
 # ── Route by PIPELINE_MODE ─────────────────────────────────────────────────

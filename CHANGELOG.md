@@ -7,7 +7,119 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [1.5.3] - 2026-07-29
+
+### Added
+
+- **`weather.common.cli_flags`**: `add_cleanup_flag`/`add_resume_flag`/
+  `add_skip_download_flag`/`add_skip_decompress_flag` — the one place
+  every `test_<provider>_{one_month,one_year,multi_year}.py` script (all
+  9) now wires its shared CLI flags from, instead of each script
+  hand-declaring its own `argparse` boilerplate. Closes the gap that let
+  COSMO-REA6 drift onto a different flag (`--no-cleanup`, negative
+  polarity) than ERA5-Land/MERRA-2 (`--cleanup`, positive) for the same
+  underlying `*_CLEANUP` setting.
+- **`tests/test_point_query.py`**: permanent regression coverage (11
+  tests) for `point_query.py`/`common/dni_reconstruction.py`/
+  `common/geo_lookup.py` — synthetic NetCDFs shaped like each provider's
+  real export (ERA5-Land/MERRA-2's `y`/`x` + 1-D aux-coord grid, COSMO's
+  `y`/`x` + 2-D coord grid), including a regression check that a
+  pre-lat/lon-fix COSMO archive raises `KeyError` rather than silently
+  returning wrong data.
+- **`weather.get_point_weather(latitude, longitude, year, provider=...)`**
+  (new `weather/point_query.py`, re-exported from `weather/__init__.py`):
+  a lightweight, downstream-facing entry point that extracts hourly
+  `T`/`GHI`/`DHI`/`DNI` for the nearest already-processed grid cell to a
+  location — no download/transform pipeline involved. Requires the new
+  `pointquery` extra (`xarray`, `netcdf4`) plus `solar` (`pvlib`) for
+  DNI/DHI reconstruction; never pulls in `cfgrib`/`dask`/`eccodes`/
+  `pyproj`. This is the intended integration point for downstream
+  per-building consumers (e.g. `buem`) that previously had no dynamic,
+  location-aware way to query this package.
+- **`weather.common.geo_lookup.find_nearest_cell(ds, lat, lon)`**: nearest
+  grid-cell index lookup against real 2-D `latitude`/`longitude`
+  coordinates. Used by `get_point_weather` for COSMO-REA6's rotated-pole
+  grid (ERA5-Land/MERRA-2 use `ds.sel(..., method="nearest")` directly,
+  since they're on a regular lat/lon grid already).
+- **`weather.common.dni_reconstruction.reconstruct_dni_dhi(...)`**: the
+  pvlib DIRINT/DISC point-of-use DNI/DHI decomposition, consolidated from
+  three previously-duplicated implementations (see Changed).
+
+### Changed
+
+- **`providers/cosmo_rea6/transform.py`** (`build_month_dataset`,
+  `build_annual_dataset`): now retain the real per-cell WGS84
+  `latitude`/`longitude` coordinates that cfgrib already decodes from
+  the source GRIBs — previously silently dropped by `_strip_scalar_coords`
+  before the final dataset was assembled (that function drops *all*
+  non-dimension coordinates, not just scalar ones, despite its name).
+  **This changes the exported `.nc` schema**: new datasets gain 2-D
+  `latitude`/`longitude` coordinates; existing already-processed COSMO-REA6
+  archives do not have them retroactively and need reprocessing
+  (transform+export only, not re-download) to pick this up.
+- **`providers/merra2/transform.py`**: the temperature variable is now
+  renamed `T2M` → `T` after Kelvin→Celsius conversion, matching
+  ERA5-Land's existing "COSMO emits canonical 'T'; match it" convention.
+  **Also changes the exported schema** for the same reason as above.
+- **`providers/era5_land/dni_pointwise.py`**,
+  **`providers/merra2/dni_pointwise.py`**: `extract_dni_dhi_dirint`/
+  `extract_dni_dhi_disc` now delegate to the shared
+  `common.dni_reconstruction.reconstruct_dni_dhi` (same public signature
+  and behaviour, previously duplicated identically between the two
+  providers).
+- **`from_csv.CsvWeatherData.reconstruct_dni_from_ghi`**: now delegates to
+  the same shared `reconstruct_dni_dhi` function (identical behaviour —
+  DISC, apparent zenith, extraterrestrial + GHI-upper clipping — just no
+  longer a separate implementation).
+- **`pyproject.toml`**: split the previously-unconditional
+  `cfgrib`/`dask`/`eccodes`/`pyproj`/`matplotlib`/`xarray`/`netcdf4`/
+  `scipy` dependency list into a new `pointquery` extra (`xarray`,
+  `netcdf4` — just enough to read already-exported files) and a new
+  `pipeline` extra (everything else, for the actual download/transform
+  pipeline). Base install is now just `numpy`/`pandas`/`python-dotenv`/
+  `requests`/`urllib3`.
+- **COSMO-REA6 realigned onto ERA5-Land/MERRA-2's architecture** —
+  triggered by investigating a production run whose downloaded/
+  decompressed intermediates had been deleted unexpectedly.
+  `providers/cosmo_rea6/download.py`/`decompress.py` gained a `months=`
+  parameter on `download_all()`/`decompress_all()` (previously
+  hardcoded to all 12 months) plus new `verify_downloads()`/
+  `verify_decompressed()`; `transform.py` gained `log_dni_stats()`/
+  `report_dni_outliers()`; `pipeline.py::run_pipeline(year, months=None,
+  ...) -> list[Path]` now does bulk download → bulk decompress →
+  per-month transform+export with `resume` support, matching ERA5-Land/
+  MERRA-2's shape exactly (previously a simpler, divergent
+  single-`build_annual_dataset()` implementation that nothing in
+  production actually used). `test_cosmo_one_month.py`/
+  `test_cosmo_one_year.py` shrank from 636/840 lines of real pipeline
+  logic to ~85/120-line thin CLI wrappers around `run_pipeline()` — no
+  pipeline logic lives in `tests/` anymore, matching ERA5-Land/MERRA-2.
+  `CosmoREA6Provider`'s `weather run` CLI adapter updated to match
+  `ERA5LandProvider`/`MERRA2Provider`'s kwarg-absorption pattern.
+  **Breaking CLI change**: COSMO's `--no-cleanup` flag is renamed to
+  `--cleanup` (positive, matching ERA5-Land/MERRA-2) across all three
+  `test_cosmo_*.py` scripts.
+- **`infrastructure/container/docker-compose.yml`/`entrypoint.sh`**: the
+  container previously read a separate `COSMO_NO_CLEANUP` variable to
+  decide whether to pass `--no-cleanup`, while `docker-compose.yml`
+  never actually wired the real `COSMO_CLEANUP` into the container at
+  all — inside the container, only the phantom variable had any effect.
+  Now passes `COSMO_CLEANUP` straight through; `EnvSettings.
+  cosmo_cleanup()` resolves it directly, no container-level flag
+  translation needed.
+
+### Fixed
+
+- **COSMO-REA6 per-month cleanup silently orphaned `.idx` files**:
+  cfgrib names its index sidecar `<grib_name>.<content-hash>.idx` (e.g.
+  `H_SNOW.2D.201801.grb.5b7b6.idx`), not `<grib_name>.idx` as the
+  cleanup code assumed — the guessed filename never matched, so `.idx`
+  deletion silently no-op'd on every cleanup-enabled run, orphaning it
+  once its parent `.grb` was deleted. This is exactly what was found on
+  a production server: `decompress/` held only ~70 KB of stray `.idx`
+  files, with all `.grb`/`.bz2` correctly gone. Fixed by also globbing
+  `<grib_name>.*.idx` (now in `pipeline.py::run_pipeline()`, relocated
+  along with the rest of the pipeline logic — see Changed).
 
 ## [1.5.2] - 2026-07-26
 

@@ -68,6 +68,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from weather.common.cli_flags import (
+    add_cleanup_flag,
+    add_resume_flag,
+    add_skip_download_flag,
+)
 from weather.settings import EnvSettings
 
 _here = Path(__file__).resolve().parent
@@ -143,13 +148,9 @@ def _parse_args() -> argparse.Namespace:
         help="Years to run simultaneously (cores divided evenly)",
     )
     p.add_argument("--work-dir", default=None, metavar="DIR")
-    p.add_argument("--resume", action="store_true")
-    p.add_argument("--skip-download", action="store_true")
-    p.add_argument(
-        "--cleanup", action="store_true",
-        default=EnvSettings.merra2_cleanup(),
-        help="Delete daily files after export (default: keep, via MERRA_CLEANUP)",
-    )
+    add_resume_flag(p)
+    add_skip_download_flag(p)
+    add_cleanup_flag(p, default=EnvSettings.merra2_cleanup())
     return p.parse_args()
 
 

@@ -47,16 +47,65 @@
   below for the still-open COSMO limitation.
 
 ## geo
-- [geo] COSMO-REA6 cannot be cropped by `weather.geo.crop` yet: its
-  production export has no lat/lon coordinates at all (only rotated-pole
-  `rlat`/`rlon` dims). cfgrib does write 2-D WGS84 `latitude`/`longitude`
-  during `transform.py`, but only the experimental/unused `compute_dni()`
-  diagnostic reads them (`transform.py:434-439`) — the real assembly
-  path drops them before export. Fixing this needs a COSMO export change
-  (attach lat/lon as auxiliary coords, or a CF `grid_mapping` variable so
-  `cdo` can crop the rotated grid directly) — deliberately not attempted
-  as part of the `geo/` submodule to avoid scope creep on an unrelated
-  pipeline.
+- [geo] FIXED (code, not yet live-run): COSMO-REA6's `transform.py`
+  (`build_month_dataset`/`build_annual_dataset`) now captures the 2-D
+  WGS84 `latitude`/`longitude` cfgrib already decodes from the source
+  GRIBs (previously dropped by `_strip_scalar_coords`, which drops *all*
+  non-dimension coords despite its name, before the real assembly path)
+  and re-attaches them as `(y, x)` coords on the output dataset. Done as
+  part of the `point_query.py` work (see `## point_query` below), not
+  the original `geo/` submodule — but it also unblocks `weather.geo.crop`
+  for COSMO, which was the original ask here.
+  **Still open**: the already-completed COSMO archive predates this fix
+  and has no lat/lon at all, so neither `weather geo crop` nor
+  `get_point_weather(provider="cosmo-rea6")` work against it yet — needs
+  a COSMO transform+export rerun (not download/decompress/percentile).
+  `tests/compare_providers.py`'s analytic rotated-pole-grid
+  reconstruction (used because the archive it reads predates this fix)
+  has not been switched over to the new real coordinates either.
+
+## point_query
+- [point_query] DONE (code), **not yet live-tested against real
+  archives**: `weather.get_point_weather(lat, lon, year, provider=...)`
+  (new `point_query.py`, re-exported from `__init__.py`) — single-
+  location `T`/`GHI`/`DHI`/`DNI` extraction from already-processed
+  provider archives, no pipeline run needed. Built for `buem`'s dynamic
+  per-building weather fetch (`buem.config.weather_cache.
+  get_or_fetch_weather`, which wraps it with a cache + a fallback to
+  buem's bundled static CSV on any exception). New `common/
+  dni_reconstruction.reconstruct_dni_dhi` consolidates the pvlib
+  DIRINT/DISC logic previously duplicated identically across
+  `era5_land/dni_pointwise.py`, `merra2/dni_pointwise.py`, and
+  `from_csv.CsvWeatherData.reconstruct_dni_from_ghi`; new `common/
+  geo_lookup.find_nearest_cell` handles COSMO's non-regular grid.
+  `pyproject.toml` split into a light base + `pointquery`/`pipeline`
+  extras (buem depends on `weather[pointquery,solar]`, matching exactly)
+  so this path doesn't pull in cfgrib/dask/eccodes.
+  Required the COSMO lat/lon fix above, plus renaming MERRA-2's `T2M` →
+  `T` (matching COSMO/ERA5-Land's existing convention) — **MERRA-2 needs
+  no rerun**, `point_query._temperature_series` falls back to the legacy
+  `T2M` name when `T` is absent. **COSMO does need a transform+export
+  rerun** (see `## geo` above) — no such fallback exists for missing
+  lat/lon. ERA5-Land's `t2m`→`T` rename and `y`/`x`+lat/lon convention
+  both predate this change, so the run in progress on `sd26` should come
+  out compatible without a rerun; spot-check the first finished output
+  file's schema once available (never tested against real ERA5-Land
+  output).
+  Verified so far: `ruff check`/`mypy` clean on all new/changed files,
+  full existing `pytest` suite (39 tests) unaffected, `import weather` +
+  `python -m weather info` both still work. Also manually smoke-tested
+  end-to-end (not a permanent test) against synthetic NetCDFs shaped
+  like real ERA5-Land output (`y`/`x` dims, 1-D `latitude`/`longitude`
+  aux coords) and real COSMO output (`y`/`x` dims, 2-D lat/lon coords) —
+  both produced correct, NaN-free `T`/`GHI`/`DHI`/`DNI`.
+  **DONE**: `tests/test_point_query.py` added (11 tests) covering
+  `point_query.py`/`dni_reconstruction.py`/`geo_lookup.py` with synthetic
+  data shaped like each provider's real export, including a regression
+  test that a pre-lat/lon-fix COSMO archive raises `KeyError` (not
+  silently wrong data). Also verified against **real** DWD data this
+  session: reran the (now-refactored, see `## cosmo_rea6`)
+  `test_cosmo_one_month.py` for Feb 2018 against cached GRIBs, confirmed
+  lat/lon present and `get_point_weather` round-trips correctly.
 
 ## era5_land
 - [era5_land] Bulk 1950–2025 run not yet executed — see plan checklist.
@@ -66,6 +115,43 @@
 - [era5_land] pipeline_interleaved.py deferred (deliberately).
 
 ## cosmo_rea6
+- [cosmo_rea6] FIXED (and relocated): the per-month GRIB cleanup
+  constructed the cfgrib index sidecar path as `<grib_name>.idx`, but
+  cfgrib actually names it `<grib_name>.<content-hash>.idx` (e.g.
+  `H_SNOW.2D.201801.grb.5b7b6.idx` — confirmed from a real rerun's log
+  output). The hardcoded guess never matched, so `.idx` deletion
+  silently no-op'd every time, orphaning it once its parent `.grb` was
+  deleted — this is exactly what was found on the production server:
+  `decompress/` had only ~70 KB of stray `.idx` files left, `.grb`/
+  `.bz2` all gone. Fixed by also globbing `<grib_name>.*.idx`; this
+  logic now lives in `pipeline.py::run_pipeline()` (moved there along
+  with the rest of the pipeline — see the architecture entry below), not
+  in a test file.
+  **Root cause of cleanup running at all** (found, not just theorized):
+  the user confirmed the production run was **more than 5 days before**
+  this investigation (i.e. before 2026-07-24) — which predates commit
+  `565fd47` (2026-07-24), the commit that centralized `COSMO_CLEANUP`
+  defaulting `False`/keep-everything. A checkout that old still has the
+  pre-fix behavior (COSMO defaulting to aggressive cleanup), which alone
+  explains the deleted intermediates — no `COSMO_CLEANUP=true`
+  misconfiguration needed. Confirm the server's checkout is now current
+  before the next rerun.
+- [cosmo_rea6] DONE: **cleanup config centralized + COSMO's real pipeline
+  moved out of test files into `providers/cosmo_rea6/`**, matching
+  ERA5-Land/MERRA-2's architecture. Triggered directly by the two
+  findings above (COSMO's 4 overlapping cleanup knobs — `COSMO_CLEANUP`,
+  each script's own `--no-cleanup`, and the container's separate
+  `COSMO_NO_CLEANUP`, which `docker-compose.yml` wired in while never
+  wiring in the real `COSMO_CLEANUP` at all — and COSMO's test files
+  containing 636-744 lines of real pipeline logic vs. ERA5-Land/
+  MERRA-2's 65-71-line thin wrappers). See `CLAUDE.md`'s NEXT MAJOR
+  TASKS item 6 for the full breakdown of what moved where. Verified:
+  `ruff check src/`/`mypy src` clean repo-wide, full `pytest` suite
+  unaffected, and a real end-to-end rerun of the refactored
+  `test_cosmo_one_month.py` against cached real Feb-2018 DWD GRIBs
+  (correct DNI stats, zero outliers >= 1400 W/m², lat/lon present,
+  `get_point_weather` round-trip confirmed) plus an isolated unit check
+  that the `.idx` glob fix actually deletes the hash-suffixed file.
 - [cosmo_rea6] export.py docstring references old `buem.weather` path.
 - [cosmo_rea6] Local imports in export.py/pipeline.py — hoist to module
   level.

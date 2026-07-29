@@ -88,11 +88,11 @@ def decompress_all(
     dest_dir: Path | None = None,
     attributes: list[str] | None = None,
     year: int | None = None,
+    months: list[int] | None = None,
     threads: int | None = None,
+    max_workers: int | None = None,
 ) -> list[Path]:
-    """Decompress all ``.grb.bz2`` files for a full year.
-
-    All twelve months (January–December) are always processed.
+    """Decompress ``.grb.bz2`` files for one or more months.
 
     Parameters
     ----------
@@ -106,8 +106,15 @@ def decompress_all(
         Defaults to ``<work_dir>/decompress/``.
     attributes, year : optional
         Override config defaults.
+    months : list[int], optional
+        Months to decompress (default: all 12).
     threads : int, optional
-        Threads per decompress job.
+        bzip2 threads per decompress job (default: config
+        ``threads_per_job``, normally 1 -- see *max_workers* below).
+    max_workers : int, optional
+        Concurrent decompress jobs (default: ``min(n_tasks, ncores)``,
+        i.e. one job per core when ``threads_per_job=1``; lower this if
+        *threads* > 1 to avoid oversubscription).
 
     Returns
     -------
@@ -118,6 +125,7 @@ def decompress_all(
     src_dir = src_dir or cfg["download_dir"]
     attributes = attributes or cfg["attributes"]
     year = year or cfg["year"]
+    months = months or list(range(1, 13))
     if dest_dir is not None:
         cfg = {**cfg, "decompress_dir": dest_dir}
     if threads is not None:
@@ -129,7 +137,7 @@ def decompress_all(
     dc = CosmoDecompressor(cfg)
     jobs: list[DownloadJob] = []
     for attr in attributes:
-        for m in range(1, 13):
+        for m in months:
             bz2_name = grib_filename(attr, year, m)
             bz2_path = src_dir / attr / bz2_name
             if not bz2_path.exists():
@@ -145,24 +153,98 @@ def decompress_all(
         logger.warning("No files found to decompress.")
         return []
 
-    # Strategy: decompress multiple files concurrently.
-    # For N files and C total cores:
-    #   parallel_files = min(N, max(2, C // 4))
-    #   threads_per_file = max(1, C // parallel_files)
-    ncores = cfg["ncores"]
-    n_files = len(jobs)
-    parallel_files = min(n_files, max(2, ncores // 4))
+    if max_workers is None:
+        max_workers = min(len(jobs), cfg["ncores"])
     logger.info(
         "Decompressing %d files: %d concurrent jobs",
-        n_files,
-        parallel_files,
+        len(jobs),
+        max_workers,
     )
 
     output_paths = run_parallel(
         fn=dc.get,
         jobs=jobs,
-        max_workers=parallel_files,
+        max_workers=max_workers,
         logger=logger,
     )
     logger.info("Decompressed %d files.", len(output_paths))
     return output_paths
+
+
+# GRIB edition 1 and 2 files both begin with the ASCII string "GRIB".
+_GRIB_MAGIC = b"GRIB"
+
+
+def verify_decompressed(
+    year: int,
+    attributes: list[str],
+    months: list[int],
+    dl_dir: Path,
+    dc_dir: Path,
+) -> None:
+    """Verify every (month, attribute) decompressed ``.grb`` file.
+
+    Checks each file exists, is non-empty, expanded relative to its
+    source ``.bz2`` (bzip2 always expands GRIB data -- a same-or-smaller
+    size means truncation), and begins with the GRIB magic number.
+
+    Parameters
+    ----------
+    year : int
+        Target year.
+    attributes : list[str]
+        Attributes expected to have been decompressed.
+    months : list[int]
+        Months expected to have been decompressed.
+    dl_dir : Path
+        Root download directory (for the bz2-size comparison).
+    dc_dir : Path
+        Root decompress directory (per-attribute subdirs).
+
+    Raises
+    ------
+    RuntimeError
+        Summarising every failing file.
+    """
+    from .naming import grib_filename
+
+    tasks = [(m, a) for m in months for a in attributes]
+    n_exp = len(tasks)
+    logger.info("Verifying %d decompressed .grb files ...", n_exp)
+
+    bad: list[str] = []
+    for month, attr in tasks:
+        fname = grib_filename(attr, year, month)
+        bz2_path = dl_dir / attr / fname
+        grb_name = fname.removesuffix(".bz2")
+        grb_path = dc_dir / attr / grb_name
+
+        if not grb_path.exists():
+            bad.append(f"Missing .grb: {attr}/{grb_name}")
+            continue
+
+        grb_sz = grb_path.stat().st_size
+        if grb_sz == 0:
+            bad.append(f"Empty .grb: {attr}/{grb_name}")
+            continue
+
+        if bz2_path.exists():
+            bz2_sz = bz2_path.stat().st_size
+            if grb_sz <= bz2_sz:
+                bad.append(
+                    f"Not expanded: {attr}/{grb_name} "
+                    f"({grb_sz:,} B <= bz2 {bz2_sz:,} B)"
+                )
+                continue
+
+        with open(grb_path, "rb") as fh:
+            magic = fh.read(4)
+        if magic != _GRIB_MAGIC:
+            bad.append(f"Bad GRIB header: {attr}/{grb_name} (got {magic!r})")
+
+    if bad:
+        raise RuntimeError(
+            f"Decompression verification FAILED ({len(bad)} issue(s)):\n"
+            + "\n".join(f"  {b}" for b in bad)
+        )
+    logger.info("Decompress verification OK (%d/%d files)", n_exp, n_exp)

@@ -31,22 +31,31 @@ classifiers = [
     "Topic :: Scientific/Engineering :: GIS",
 ]
 dependencies = [
-    "cfgrib>=0.9.10",
-    "dask>=2024.1",
-    "eccodes>=2.34",
-    "matplotlib>=3.10",
-    "netcdf4>=1.6",
     "numpy>=1.26,<3",
     "pandas>=2.0,<3",
-    "pyproj>=3.6",
     "python-dotenv>=1.0",
     "requests>=2.31",
     "urllib3>=2.0",
-    "scipy>=1.12",
-    "xarray>=2024.1",
 ]
 
 [project.optional-dependencies]
+# Point-query only: opening already-processed .nc archives for a single
+# lat/lon (weather.point_query, weather.from_csv). Does NOT pull in the
+# GRIB/download/transform pipeline stack — see `pipeline` below.
+pointquery = ["xarray>=2024.1", "netcdf4>=1.6"]
+# The full download/decompress/transform pipeline (weather run ...) for
+# producing gridded archives from raw provider sources. Heavy — not needed
+# just to query an already-processed point.
+pipeline = [
+    "cfgrib>=0.9.10",
+    "dask>=2024.1",
+    "eccodes>=2.34",
+    "pyproj>=3.6",
+    "scipy>=1.12",
+    "matplotlib>=3.10",
+    "xarray>=2024.1",
+    "netcdf4>=1.6",
+]
 merge = ["h5py>=3.11"]
 solar = ["pvlib>=0.10"]
 parquet = ["pyarrow>=15.0"]

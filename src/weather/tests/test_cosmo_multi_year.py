@@ -77,7 +77,7 @@ Flags
 --skip-download         Re-use existing .grb.bz2 files
 --skip-decompress       Re-use existing .grb files
 --skip-dni              Skip experimental per-cell DNI computation
---no-cleanup            Keep all intermediate files
+--cleanup               Delete intermediates after a successful export
 """
 
 from __future__ import annotations
@@ -89,6 +89,12 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from weather.common.cli_flags import (
+    add_cleanup_flag,
+    add_resume_flag,
+    add_skip_decompress_flag,
+    add_skip_download_flag,
+)
 from weather.settings import EnvSettings
 
 _here = Path(__file__).resolve().parent   # src/weather/tests/
@@ -150,8 +156,8 @@ def run_year(
         cmd.append("--skip-decompress")
     if args.skip_dni:
         cmd.append("--skip-dni")
-    if args.no_cleanup:
-        cmd.append("--no-cleanup")
+    if args.cleanup:
+        cmd.append("--cleanup")
 
     logger.info("  [start] year %d  (ncores: %d)", year, ncores_per_year)
     result = subprocess.run(cmd, check=False)  # noqa: S603
@@ -205,30 +211,14 @@ def _parse_args() -> argparse.Namespace:
         "--work-dir", default=None, metavar="DIR",
         help="Override COSMO_WORK_DIR for all subprocesses",
     )
-    p.add_argument(
-        "--resume", action="store_true",
-        help=(
-            "Skip years where all 12 monthly NCs already exist. "
-            "Also forwarded to test_cosmo_one_year.py (skips individual months)."
-        ),
-    )
-    p.add_argument(
-        "--skip-download", action="store_true",
-        help="Re-use existing .grb.bz2 files",
-    )
-    p.add_argument(
-        "--skip-decompress", action="store_true",
-        help="Re-use existing .grb files",
-    )
+    add_resume_flag(p)
+    add_skip_download_flag(p)
+    add_skip_decompress_flag(p)
     p.add_argument(
         "--skip-dni", action="store_true",
         help="Skip experimental per-cell DNI computation",
     )
-    p.add_argument(
-        "--no-cleanup", action="store_true",
-        default=not EnvSettings.cosmo_cleanup(),
-        help="Keep intermediate files (default: keep, via COSMO_CLEANUP)",
-    )
+    add_cleanup_flag(p, default=EnvSettings.cosmo_cleanup())
     return p.parse_args()
 
 
@@ -362,7 +352,7 @@ def main() -> None:
     # that all years have cleared their per-attribute subdirs.  This only
     # succeeds when every attr subdir was already removed by test_one_year;
     # it silently skips if any content remains or paths are unknown.
-    if not args.no_cleanup and out_dir is not None:
+    if args.cleanup and out_dir is not None:
         _work_path = out_dir.parent   # work_dir = parent of output/
         for _d_name in ("download", "decompress"):
             _d = _work_path / _d_name

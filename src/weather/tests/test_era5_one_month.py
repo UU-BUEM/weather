@@ -29,6 +29,11 @@ from __future__ import annotations
 import argparse
 import logging
 
+from weather.common.cli_flags import (
+    add_cleanup_flag,
+    add_resume_flag,
+    add_skip_download_flag,
+)
 from weather.providers.era5_land.pipeline import run_pipeline
 from weather.settings import EnvSettings
 
@@ -52,13 +57,9 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--work-dir", default=None, metavar="DIR")
     p.add_argument("--ncores", type=int, default=None, metavar="N")
     p.add_argument("--night-mask", action="store_true")
-    p.add_argument("--skip-download", action="store_true")
-    p.add_argument("--resume", action="store_true")
-    p.add_argument(
-        "--cleanup", action="store_true",
-        default=EnvSettings.era5_cleanup(),
-        help="Delete the GRIB after export (default: keep, via ERA5_CLEANUP)",
-    )
+    add_skip_download_flag(p)
+    add_resume_flag(p)
+    add_cleanup_flag(p, default=EnvSettings.era5_cleanup())
     return p.parse_args()
 
 

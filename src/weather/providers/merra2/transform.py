@@ -269,6 +269,14 @@ def build_monthly_dataset(
         ds["RH"] = rh
 
     # ── Cross-provider naming uniformity ────────────────────────────
+    # 2 m air temperature: COSMO/ERA5-Land emit canonical 'T' (degC);
+    # match it (T2M was already K->degC converted above by
+    # _convert_units -- _compute_rh's Bolton formula depends on it still
+    # being named "T2M" at that point, so this rename must happen after
+    # _compute_rh, not inside _convert_units).
+    if "T2M" in ds:
+        ds = ds.rename({"T2M": "T"})
+
     # Spatial dims: COSMO/ERA5-Land use (y, x); MERRA-2 arrives on
     # (lat, lon).  Stash geographic lat/lon as coordinates, then rename
     # the dims, matching era5_land/transform.py's approach exactly.

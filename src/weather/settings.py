@@ -47,9 +47,10 @@ To override for a single run without touching ``.env``::
     ERA5_FROM_YEAR     # multi-year run start (default 1940)
     ERA5_TO_YEAR       # multi-year run end, inclusive (default 2025)
 
-Every provider's own ``--cleanup``/``--no-cleanup`` CLI flag (in
-``tests/test_<provider>_one_month/one_year/multi_year.py``) defaults
-from exactly one of the ``*_CLEANUP`` settings, and every
+Every provider's own ``--cleanup`` CLI flag (in
+``tests/test_<provider>_one_month/one_year/multi_year.py``, wired via
+``common/cli_flags.add_cleanup_flag()``) defaults from exactly one of
+the ``*_CLEANUP`` settings, and every
 ``test_<provider>_multi_year.py``'s ``--from-year``/``--to-year``
 defaults from the matching ``*_FROM_YEAR``/``*_TO_YEAR`` pair -- change
 the env var once and every runner picks it up; the CLI flag still
@@ -211,10 +212,12 @@ class EnvSettings:
         Default ``False`` (keep everything) -- single source of truth for
         every COSMO entrypoint's cleanup default (``pipeline.py``'s
         ``run_pipeline()`` and the ``test_cosmo_one_month/one_year/
-        multi_year.py`` runners' ``--no-cleanup`` flag). Set
+        multi_year.py`` runners' ``--cleanup`` flag). Set
         ``COSMO_CLEANUP=true`` in ``.env`` to delete by default instead;
-        each runner's own ``--cleanup``/``--no-cleanup`` CLI flag still
-        overrides this per-invocation.
+        each runner's own ``--cleanup`` CLI flag still overrides this
+        per-invocation. Also read directly by the container entrypoint
+        (``infrastructure/container/``) -- no separate container-level
+        variable exists for this anymore.
         """
         return _env_bool("COSMO_CLEANUP", False)
 

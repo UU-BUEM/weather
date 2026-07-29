@@ -100,10 +100,12 @@ are capped at `n` so the split only matters when `ncores < 2 * n_attrs`.
 
 ## 3. Annual pipeline: bulk parallel phases
 
-The annual script (`test_cosmo_one_year.py`) exploits a key fact: **all
-12 months × 9 attributes = 108 download tasks are completely independent**,
-and so are all 108 decompress tasks. The script therefore processes them in
-two bulk phases before any transform work begins.
+`providers/cosmo_rea6/pipeline.py::run_pipeline()` (called by the thin
+`test_cosmo_one_year.py`/`test_cosmo_one_month.py` CLI wrappers, matching
+ERA5-Land/MERRA-2's pattern) exploits a key fact: **all 12 months × 9
+attributes = 108 download tasks are completely independent**, and so are
+all 108 decompress tasks. It therefore processes them in two bulk phases
+before any transform work begins.
 
 Full execution flow with integrity checks:
 
@@ -129,12 +131,12 @@ Phase 2 — Bulk decompress (all 108 .grb files)
   └─────────────────────────────────────────────────────────────────────┘
        │
        ▼
-  [CHECK C] _verify_decompressed — sequential, all local disk
+  [CHECK C] decompress.verify_decompressed() — sequential, all local disk
             stat() + size-expansion check + 4-byte GRIB magic
             108 files; expected wall time: < 100 ms
        │
        ▼
-  [CHECK B] _verify_downloads — sequential, after ProcessPoolExecutor exits
+  [CHECK B] download.verify_downloads() — sequential, after ProcessPoolExecutor exits
             94 parallel HEAD requests to DWD (I/O-bound)
             compares local bz2 size to Content-Length header
             Must run BEFORE bz2 cleanup so local files still exist
@@ -202,7 +204,7 @@ but all `.grb.bz2` were already cleaned up after Phase 2):
 
 ```bash
 python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 94 \
-    --skip-download --skip-decompress --resume
+    --skip-download --skip-decompress --resume --cleanup
 ```
 
 - `--skip-download` : bypass Phase 1 entirely (bz2 files already cleaned up)
@@ -221,24 +223,28 @@ keeping source files available for diagnosis or re-run.
 ```text
 Phase 2 — Bulk decompress completes + CHECK C passes
   └─► CLEANUP A  remove each month's .grb.bz2 from dl_dir  (frees ~12 GB)
-      Scoped to months_to_process × _ALL_ATTRS (exact filenames,
+      Scoped to months_to_process × attributes (exact filenames,
       never a glob — safe with --resume partial runs)
-      Condition: do_dl and not args.no_cleanup
+      Condition: do_dl and cleanup
 
 Phase 3 — per month, after export:
   [3/3] Export NetCDF (export_netcdf raises on any write failure)
         │
         ├─► close all xr.Dataset handles
         └─► CLEANUP B  remove THIS month's .grb + .idx + .lock from dc_dir
-            Exact filenames only — never touches other months' .grb files
-            (frees ~7 GB per month as each month completes)
-            Condition: do_dc and not args.no_cleanup
+            Exact filenames, plus a glob for cfgrib's hash-suffixed
+            index sidecar (`<grb_name>.<hash>.idx`, not `<grb_name>.idx`
+            — a real bug found and fixed this session: the plain-name
+            guess never matched, so .idx files were silently orphaned
+            on every cleanup-enabled run). Never touches other months'
+            .grb files (frees ~7 GB per month as each month completes).
+            Condition: do_dc and cleanup
 
 After all months complete:
   CLEANUP C  rmdir per-attribute subfolders in dl_dir and dc_dir
              (rmdir silently fails if non-empty — safe with
              --parallel-years: other years may still hold their files)
-             Condition: not args.no_cleanup
+             Condition: cleanup
 ```
 
 **Peak disk usage** (during Phase 3, just after Phase 2 cleanup):
@@ -253,9 +259,14 @@ Once Phase 3 starts consuming months, `dc_dir` shrinks by ~7 GB per month.
 By the time month 12 completes, `dc_dir` is empty and `out_dir` holds the
 12 final NetCDF files (~24 GB).
 
-Both cleanups are gated on the `do_dl` / `do_dc` flags and `--no-cleanup`,
-so `--skip-download`, `--skip-decompress`, and `--no-cleanup` suppress the
-relevant call.
+Both cleanups are gated on the `do_dl` / `do_dc` flags and `--cleanup`
+(a positive flag, matching ERA5-Land/MERRA-2 — this used to be COSMO's
+own negative `--no-cleanup`, renamed for consistency), so
+`--skip-download`, `--skip-decompress`, and omitting `--cleanup` suppress
+the relevant call. All of this logic now lives in
+`providers/cosmo_rea6/pipeline.py::run_pipeline()`, not in the test
+script itself — `test_cosmo_one_year.py`/`test_cosmo_one_month.py` are
+thin CLI wrappers around it, matching ERA5-Land/MERRA-2.
 
 ---
 

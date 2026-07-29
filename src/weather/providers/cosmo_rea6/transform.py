@@ -613,6 +613,189 @@ def compute_dni(
     return dni
 
 
+def log_dni_stats(dni: xarray.DataArray, ds_direct: xarray.Dataset) -> None:
+    """Log DNI distribution stats and consistency checks (informational only).
+
+    Samples every 24th timestep (~1 snapshot/day) to keep memory low.
+    Does not modify any data or raise exceptions.
+
+    Notes on expected value ranges
+    ------------------------------
+    Negative DNI is structurally impossible: SWDIRS_RAD >= 0 always (it is
+    an irradiance from the CR6 reanalysis model) and cos_sza is clipped to
+    a small positive value, so the division cannot produce a negative
+    result.
+
+    Checks logged
+    -------------
+    - SWDIRS = 0 -> DNI = 0 (consistency between input and output).
+    - DNI >= SWDIRS_RAD for all daytime cells (cos_sza <= 1, so dividing
+      by it can only increase or preserve the value).
+    - Percentile distribution of daytime-only DNI values.
+    - Zero fraction (= night + below-elevation-threshold fraction).
+    """
+    logger.info("  DNI stats (daily sample) ...")
+
+    raw_name = next(iter(ds_direct.data_vars))
+    swdirs = ds_direct[raw_name]
+
+    stride = max(1, len(dni.time) // 31)
+    try:
+        dni_s = (
+            dni.isel(time=slice(None, None, stride))
+            .values.ravel().astype("float32")
+        )
+        sw_s = (
+            swdirs.isel(time=slice(None, None, stride))
+            .values.ravel().astype("float32")
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("  DNI stats skipped — could not compute sample: %s", exc)
+        return
+
+    n_total = len(dni_s)
+
+    # Consistency: SWDIRS = 0 → DNI must be 0
+    mask_night = sw_s <= 0.0
+    n_bad = int((mask_night & (dni_s > 0.1)).sum())
+    if n_bad > 0:
+        logger.warning(
+            "  SWDIRS=0 but DNI>0: %d cells — check CR6 data or formula",
+            n_bad,
+        )
+    else:
+        logger.info("  SWDIRS=0 → DNI=0  (consistent)")
+
+    # Consistency: DNI ≥ SWDIRS for cells where DNI > 0 (cos_sza ≤ 1 always).
+    # We exclude DNI = 0 cells because the elevation threshold deliberately
+    # zeros DNI when sun elevation < 5°, even if SWDIRS_RAD is small but
+    # non-zero (CR6 assigns tiny SWDIRS values at grazing incidence).
+    # Those zeroed cells are correct behaviour, not a formula error.
+    mask_day = sw_s > 1.0
+    n_day = int(mask_day.sum())
+    mask_active = mask_day & (dni_s > 0.0)   # sun above threshold
+    n_active = int(mask_active.sum())
+    n_zeroed = n_day - n_active              # correctly zeroed by threshold
+    if n_zeroed > 0:
+        logger.info(
+            "  %d daytime cells zeroed by elevation threshold (correct)",
+            n_zeroed,
+        )
+    if n_active > 0:
+        n_bad2 = int((mask_active & (dni_s < sw_s * 0.99)).sum())
+        if n_bad2 > 0:
+            logger.warning(
+                "  DNI < SWDIRS_RAD: %d / %d above-threshold cells"
+                " — unexpected (cos_sza clamped to 1.0, check formula)",
+                n_bad2, n_active,
+            )
+        else:
+            logger.info(
+                "  DNI >= SWDIRS_RAD for all %d above-threshold cells",
+                n_active,
+            )
+
+    # Distribution
+    pct_zero = 100.0 * float((dni_s == 0.0).sum()) / n_total
+    logger.info("DNI zero fraction (night + below-threshold): %.1f%%", pct_zero)
+
+    dni_day = dni_s[mask_day]
+    if len(dni_day) > 0:
+        logger.info(
+            "DNI daytime percentiles (n=%d):"
+            "p25=%.0f  p50=%.0f  p75=%.0f  p95=%.0f  p99=%.0f  max=%.0f  W/m²",
+            len(dni_day),
+            float(np.percentile(dni_day, 25)),
+            float(np.percentile(dni_day, 50)),
+            float(np.percentile(dni_day, 75)),
+            float(np.percentile(dni_day, 95)),
+            float(np.percentile(dni_day, 99)),
+            float(dni_day.max()),
+        )
+
+
+def report_dni_outliers(nc_path: Path, threshold: float = 1400.0) -> None:
+    """Open the saved NetCDF and report cells where DNI exceeds *threshold*.
+
+    Finds all grid cells whose peak DNI across all timesteps is >=
+    threshold, then logs their latitude, longitude, grid indices (y, x),
+    and peak value. At most 20 cells are listed individually; the total
+    count is always shown.
+
+    Parameters
+    ----------
+    nc_path : Path
+        Path to the exported NetCDF file.
+    threshold : float
+        W/m² above which a cell is considered an outlier. Default 1400
+        W/m². The solar constant is ~1361 W/m² at TOA; surface DNI cannot
+        reach this value, so any cell >= 1400 W/m² indicates unphysical
+        CR6 data or a formula error in :func:`compute_dni`.
+    """
+    xr = _import_xarray()
+
+    logger.info("=" * 68)
+    logger.info("DNI OUTLIER REPORT  (threshold >= %.0f W/m²)", threshold)
+
+    with xr.open_dataset(nc_path) as ds:
+        if "DNI" not in ds:
+            logger.info("DNI not present in output file (--skip-dni was used)")
+            return
+
+        dni = ds["DNI"]
+
+        # Peak DNI at each grid cell across all timesteps → shape (y, x)
+        dni_peak = dni.max(dim="time").values.astype("float32")
+        mask = dni_peak >= threshold
+        n_cells = int(mask.sum())
+        total_cells = int(mask.size)
+
+        if n_cells == 0:
+            logger.info(
+                "  No cells with DNI >= %.0f W/m²  "
+                "(all values within physical range)",
+                threshold,
+            )
+            return
+
+        pct = 100.0 * n_cells / total_cells
+        logger.warning(
+            "  %d / %d grid cells (%.4f%%) have peak DNI >= %.0f W/m²",
+            n_cells, total_cells, pct, threshold,
+        )
+
+        has_coords = "latitude" in ds.coords and "longitude" in ds.coords
+        if has_coords:
+            lat2d = ds["latitude"].values
+            lon2d = ds["longitude"].values
+
+        ys, xs = np.where(mask)
+        vals = dni_peak[mask]
+        order = np.argsort(vals)[::-1][:20]
+
+        logger.warning("  Top %d cells by peak DNI:", min(20, n_cells))
+        for rank, idx in enumerate(order):
+            y, x = int(ys[idx]), int(xs[idx])
+            peak = float(vals[idx])
+            if has_coords:
+                logger.warning(
+                    "    #%02d  lat=%7.3f  lon=%7.3f"
+                    "  (y=%d, x=%d)  peak=%.1f W/m²",
+                    rank + 1, float(lat2d[y, x]), float(lon2d[y, x]),
+                    y, x, peak,
+                )
+            else:
+                logger.warning(
+                    "    #%02d  y=%d  x=%d  peak=%.1f W/m²",
+                    rank + 1, y, x, peak,
+                )
+
+        if n_cells > 20:
+            logger.warning("  ... and %d more cells (not listed)", n_cells - 20)
+
+    logger.info("=" * 68)
+
+
 def _strip_scalar_coords(da: xarray.DataArray) -> xarray.DataArray:
     """Drop all non-dimension scalar coordinates from a DataArray.
 
@@ -734,8 +917,9 @@ def build_annual_dataset(
     xarray.Dataset
         Variables: ``T``, ``GHI``, ``DHI``, ``WS_10M``, and optionally
         ``U_10M``, ``V_10M``.  Coordinates include the native rotated-pole
-        grid (``rlat``, ``rlon``) and auxiliary WGS84 ``latitude`` /
-        ``longitude`` (if the COSMO_REA6_CONST file has been downloaded).
+        grid dims (``y``, ``x``) and, when cfgrib decodes them from the
+        source GRIBs (the normal case), auxiliary 2-D WGS84 ``latitude``/
+        ``longitude`` coordinates — see :func:`find_nearest_cell`.
 
     Notes
     -----
@@ -773,6 +957,25 @@ def build_annual_dataset(
         results = list(pool.map(_load, attrs_to_load))
 
     ds_diffuse, ds_direct, ds_temp, ds_u, ds_v = results
+
+    # Capture the real per-cell WGS84 coordinates cfgrib already decoded
+    # from the GRIB grid definition, before the derived-variable strip
+    # below drops them (they are auxiliary, non-dimension coordinates on
+    # ds_direct itself, untouched by that strip). Re-attached to the
+    # final dataset below so point_query.find_nearest_cell can do a real
+    # nearest-neighbor search instead of an approximate rotated-pole
+    # reconstruction.
+    lat_2d: np.ndarray | None
+    lon_2d: np.ndarray | None
+    if "latitude" in ds_direct.coords and "longitude" in ds_direct.coords:
+        lat_2d = ds_direct["latitude"].values
+        lon_2d = ds_direct["longitude"].values
+    else:
+        lat_2d = lon_2d = None
+        logger.warning(
+            "SWDIRS_RAD dataset missing latitude/longitude coordinates; "
+            "output will not carry per-cell coordinates."
+        )
 
     # Derive fields
     T = convert_temperature(ds_temp)
@@ -814,6 +1017,12 @@ def build_annual_dataset(
             ),
         },
     )
+
+    if lat_2d is not None:
+        out = out.assign_coords(
+            latitude=(("y", "x"), lat_2d),
+            longitude=(("y", "x"), lon_2d),
+        )
 
     if include_wind_components:
         u_raw = _strip_scalar_coords(_resolve_var(ds_u, "u10"))
@@ -895,9 +1104,11 @@ def build_month_dataset(
     Returns
     -------
     tuple[xarray.Dataset, dict[str, xarray.Dataset]]
-        The assembled month dataset, and the raw per-attribute datasets
-        (needed by callers for DNI outlier/stats logging against the raw
-        ``SWDIRS_RAD`` field).
+        The assembled month dataset (carrying auxiliary 2-D WGS84
+        ``latitude``/``longitude`` coordinates when cfgrib decodes them
+        from the source GRIBs — see :func:`find_nearest_cell`), and the
+        raw per-attribute datasets (needed by callers for DNI
+        outlier/stats logging against the raw ``SWDIRS_RAD`` field).
     """
     xr = _import_xarray()
 
@@ -905,6 +1116,21 @@ def build_month_dataset(
         attr: open_grib_month(attr, year, month, grb_dir=grb_dir)
         for attr in ATTRIBUTES
     }
+
+    # See build_annual_dataset for why this is captured before the
+    # derived-variable strip below.
+    _swdirs = datasets["SWDIRS_RAD"]
+    lat_2d: np.ndarray | None
+    lon_2d: np.ndarray | None
+    if "latitude" in _swdirs.coords and "longitude" in _swdirs.coords:
+        lat_2d = _swdirs["latitude"].values
+        lon_2d = _swdirs["longitude"].values
+    else:
+        lat_2d = lon_2d = None
+        logger.warning(
+            "SWDIRS_RAD dataset missing latitude/longitude coordinates; "
+            "output will not carry per-cell coordinates."
+        )
 
     T = _strip_scalar_coords(convert_temperature(datasets["T_2M"]))
     GHI = _strip_scalar_coords(
@@ -927,8 +1153,21 @@ def build_month_dataset(
         data_vars["DNI"] = DNI
 
     ds_out = xr.Dataset(data_vars)
+    if lat_2d is not None:
+        ds_out = ds_out.assign_coords(
+            latitude=(("y", "x"), lat_2d),
+            longitude=(("y", "x"), lon_2d),
+        )
     logger.info(
         "Month dataset assembled: %d variables, %d timesteps",
         len(ds_out.data_vars), ds_out.sizes.get("time", 0),
     )
     return ds_out, datasets
+
+
+# Re-exported here for backward-compatible import convenience within the
+# pipeline; the actual implementation lives in weather.common.geo_lookup
+# (pure numpy, no xarray/cfgrib) so weather.point_query — and anything
+# else that only needs a nearest-cell lookup — can use it without
+# triggering this package's heavy __init__.py import chain.
+from ...common.geo_lookup import find_nearest_cell  # noqa: E402,F401

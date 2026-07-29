@@ -72,46 +72,9 @@ Usage
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
-import numpy as np
-import pandas as pd
-import pvlib
-
-logger = logging.getLogger(__name__)
-
-_STD_PRESSURE_PA: float = 101325.0
-
-
-def _solar_position(times: Any, latitude: float, longitude: float):
-    """Return pvlib NREL-SPA solar position for one location."""
-    return pvlib.solarposition.get_solarposition(
-        time=times, latitude=latitude, longitude=longitude
-    )
-
-
-def _align_pressure(pressure: Any, times: pd.DatetimeIndex) -> pd.Series:
-    """Return *pressure* reindexed onto *times*, tz-alignment-safe.
-
-    ``ghi``'s index gets localized to UTC above (when tz-naive) before
-    this is called, but a caller-supplied pressure Series is typically
-    still tz-naive (e.g. straight off ``ds["PS"].to_series()``). A
-    plain ``.reindex(times)`` against a tz-aware target then silently
-    returns all-NaN (tz-naive and tz-aware timestamps never compare
-    equal), which propagates through pvlib's ``disc``/``dirint``
-    airmass calculation into an all-zero DNI — no exception, no
-    warning, just quietly wrong output. Match tz-awareness before
-    reindexing to avoid this.
-    """
-    if np.isscalar(pressure):
-        return pd.Series(pressure, index=times)
-    pres = pd.Series(pressure)
-    pres_idx = pd.DatetimeIndex(pres.index)
-    if pres_idx.tz is None:
-        pres_idx = pres_idx.tz_localize("UTC")
-    pres.index = pres_idx
-    return pres.reindex(times)
+from ...common.dni_reconstruction import reconstruct_dni_dhi
 
 
 def extract_dni_dhi_dirint(
@@ -139,35 +102,9 @@ def extract_dni_dhi_dirint(
     dict
         ``{"DNI": Series, "DHI": Series}`` in W/m^2, clipped >= 0.
     """
-    ghi = pd.Series(ghi)
-    times = pd.DatetimeIndex(ghi.index)
-    if times.tz is None:
-        times = times.tz_localize("UTC")
-        ghi.index = times
-
-    solpos = _solar_position(times, latitude, longitude)
-    zenith = solpos["zenith"]
-
-    if pressure is None:
-        pressure = _STD_PRESSURE_PA
-    pres = _align_pressure(pressure, times)
-
-    dni = pvlib.irradiance.dirint(
-        ghi=ghi,
-        solar_zenith=zenith,
-        times=times,
-        pressure=pres,
-    ).fillna(0.0).clip(lower=0.0)
-
-    cos_z = np.cos(np.radians(zenith))
-    dhi = (ghi - dni * cos_z).clip(lower=0.0)
-
-    # Night mask (zenith >= 90 deg) for consistency with stored GHI.
-    night = zenith >= 90.0
-    dni[night] = 0.0
-    dhi[night] = 0.0
-
-    return {"DNI": dni, "DHI": dhi}
+    return reconstruct_dni_dhi(
+        ghi, latitude, longitude, method="dirint", pressure=pressure
+    )
 
 
 def extract_dni_dhi_disc(
@@ -182,32 +119,6 @@ def extract_dni_dhi_disc(
     DISC is the predecessor of DIRINT; provided for comparison /
     validation.
     """
-    ghi = pd.Series(ghi)
-    times = pd.DatetimeIndex(ghi.index)
-    if times.tz is None:
-        times = times.tz_localize("UTC")
-        ghi.index = times
-
-    solpos = _solar_position(times, latitude, longitude)
-    zenith = solpos["zenith"]
-
-    if pressure is None:
-        pressure = _STD_PRESSURE_PA
-    pres = _align_pressure(pressure, times)
-
-    disc = pvlib.irradiance.disc(
-        ghi=ghi,
-        solar_zenith=zenith,
-        datetime_or_doy=times,
-        pressure=pres,
+    return reconstruct_dni_dhi(
+        ghi, latitude, longitude, method="disc", pressure=pressure
     )
-    dni = disc["dni"].fillna(0.0).clip(lower=0.0)
-
-    cos_z = np.cos(np.radians(zenith))
-    dhi = (ghi - dni * cos_z).clip(lower=0.0)
-
-    night = zenith >= 90.0
-    dni[night] = 0.0
-    dhi[night] = 0.0
-
-    return {"DNI": dni, "DHI": dhi}

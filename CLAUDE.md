@@ -45,10 +45,91 @@ changes (same commit).
    this repo's own `[N,W,S,E]` convention, with explicit converters to
    CDO's different axis order), `crop.py` (real `cdo sellonlatbox`
    subprocess cropping, not just a lookup). CLI: `weather geo
-   {crop,list}`. Works today for ERA5-Land/MERRA-2 output NetCDFs;
-   COSMO-REA6 can't be cropped yet — its production export has no
-   lat/lon (see `.claude/open.md`). Not wired into any `pipeline.py`
+   {crop,list}`. Works today for ERA5-Land/MERRA-2 output NetCDFs.
+   COSMO-REA6 was blocked on missing lat/lon in its production export;
+   `transform.py` now retains it (see item 5) but a COSMO transform+export
+   rerun is still needed before `weather geo crop` works against COSMO
+   output — see `.claude/open.md`. Not wired into any `pipeline.py`
    (standalone post-processing step by design).
+5. **Point-query entry point for downstream consumers** — DONE (code),
+   **not yet live-tested against real archives**. New `weather.
+   get_point_weather(lat, lon, year, provider=...)` (`point_query.py`,
+   re-exported from `__init__.py`) extracts hourly `T`/`GHI`/`DHI`/`DNI`
+   for the nearest already-processed grid cell — no pipeline run
+   involved. Built for `buem`'s dynamic per-building weather fetch
+   (`buem.config.weather_cache`). Shared helpers: `common.
+   dni_reconstruction.reconstruct_dni_dhi` (consolidates the pvlib
+   DIRINT/DISC logic previously duplicated across `era5_land/
+   dni_pointwise.py`, `merra2/dni_pointwise.py`, and `from_csv.py`) and
+   `common.geo_lookup.find_nearest_cell` (COSMO's non-regular grid).
+   `pyproject.toml` split into a light base + `pointquery`/`pipeline`
+   extras so this path doesn't pull in cfgrib/dask/eccodes. Required two
+   provider-side schema changes to make COSMO/MERRA-2 point-queryable at
+   all: COSMO's `transform.py` now retains the real 2-D WGS84 lat/lon
+   cfgrib already decodes (previously dropped by `_strip_scalar_coords`
+   before export — see `## geo` in `.claude/open.md`), and MERRA-2's
+   `transform.py` renames `T2M`→`T` to match COSMO/ERA5-Land. **Neither
+   already-completed archive has these retroactively**: MERRA-2 is
+   handled backward-compatibly (`point_query._temperature_series` falls
+   back to `T2M` when `T` is absent — no rerun needed), but COSMO has no
+   fallback for missing lat/lon — `get_point_weather(provider=
+   "cosmo-rea6")` raises `KeyError` against the already-completed COSMO
+   archive until COSMO's transform+export phase is rerun (not
+   download/decompress/percentile). ERA5-Land's `t2m`→`T` rename and
+   `y`/`x`+lat/lon convention both predate this change, so the run
+   currently in progress on `sd26` should come out point-query-compatible
+   without a rerun — spot-check the first finished output file's schema
+   once available (never tested against real ERA5-Land output).
+   Verified: `ruff`/`mypy` clean, existing `pytest` suite unaffected,
+   plus a manual end-to-end smoke test against synthetic NetCDFs shaped
+   like real ERA5-Land and COSMO output, and a permanent
+   `tests/test_point_query.py` added covering `point_query.py`/
+   `dni_reconstruction.py`/`geo_lookup.py` (11 tests). The COSMO lat/lon
+   fix itself has now been verified against real DWD data too (see item
+   6) — `get_point_weather(provider="cosmo-rea6")` confirmed working
+   against a freshly-regenerated real month.
+6. **COSMO-REA6 aligned with ERA5-Land/MERRA-2's architecture + cleanup
+   centralized** — DONE. Investigating why a production COSMO run on
+   `sd26` had its `download`/`decompress` intermediates deleted (likely
+   a stale pre-`565fd47` checkout — that commit is what centralized
+   `COSMO_CLEANUP` defaulting `False`) surfaced two structural drifts,
+   both fixed:
+   (a) **Cleanup had 4 overlapping knobs for COSMO** (`COSMO_CLEANUP`,
+   each script's own hand-declared `--no-cleanup`, and the container's
+   separate `COSMO_NO_CLEANUP` — which `docker-compose.yml` wired in but
+   never wired in the real `COSMO_CLEANUP` at all, so inside the
+   container only the phantom variable had any effect) vs. ERA5-Land/
+   MERRA-2's one var + one positive `--cleanup` flag. Fixed: new
+   `common/cli_flags.py` (`add_cleanup_flag`/`add_resume_flag`/
+   `add_skip_download_flag`/`add_skip_decompress_flag`) is now the one
+   place every `test_<provider>_*.py` script wires its flags from
+   (COSMO's `--no-cleanup` renamed to `--cleanup` for parity — a
+   deliberate breaking CLI change, every in-repo reference updated in
+   the same change); `docker-compose.yml`/`entrypoint.sh` now pass
+   `COSMO_CLEANUP` straight through instead of the phantom variable.
+   (b) **COSMO's test files contained the real pipeline** (bulk
+   download/decompress, resume, cleanup, DNI-outlier diagnostics —
+   `test_cosmo_one_year.py`/`test_cosmo_one_month.py` were 744/636 lines
+   vs. ERA5-Land/MERRA-2's 68-71-line thin CLI wrappers around their own
+   `pipeline.py::run_pipeline()`), while COSMO's own `pipeline.py` did
+   something different and simpler — two drifting implementations of
+   the same pipeline. Fixed: all of it now lives in
+   `providers/cosmo_rea6/` — `download.py`/`decompress.py` gained
+   `months=`-aware `download_all()`/`decompress_all()` plus new
+   `verify_downloads()`/`verify_decompressed()`; `transform.py` gained
+   `log_dni_stats()`/`report_dni_outliers()`; `pipeline.py::run_pipeline
+   (year, months=None, ...)` now does per-month sequential transform+
+   export with resume, matching ERA5-Land/MERRA-2's shape exactly (and
+   returns `list[Path]`, so `CosmoREA6Provider`'s CLI adapter now matches
+   `ERA5LandProvider`/`MERRA2Provider`'s pattern too). COSMO's
+   `test_cosmo_one_month/one_year.py` are now thin wrappers (~80-115
+   lines); `test_cosmo_multi_year.py` unchanged in shape (was already a
+   thin subprocess-fan-out script, just updated to the new flag name).
+   Verified: `ruff check src/`/`mypy src` clean repo-wide, full `pytest`
+   suite unaffected, and a real end-to-end rerun of the new thin
+   `test_cosmo_one_month.py` against cached real Feb-2018 DWD GRIBs
+   (correct DNI stats, zero outliers, lat/lon present,
+   `get_point_weather` round-trip confirmed).
 
 ## Operating rules for Claude Code (read first)
 
@@ -102,7 +183,13 @@ CI (`.github/workflows/ci.yml`) runs, and all must pass:
 - **Containers** (`infrastructure/container/`): Dockerfile, docker-compose.yml,
   entrypoint.sh route by `PIPELINE_MODE` ∈ {single-year, multi-year, merge,
   percentile, check}. `check` = imports + `weather info` + unit tests, no
-  data. Env is `infrastructure/env/weather_env.yml`.
+  data. Env is `infrastructure/env/weather_env.yml`. Cleanup is controlled
+  by `COSMO_CLEANUP` (passed straight through to the container; read
+  directly by `EnvSettings.cosmo_cleanup()`) — the container previously
+  had a separate `COSMO_NO_CLEANUP` variable that `docker-compose.yml`
+  never actually connected to the real `COSMO_CLEANUP`, so only the
+  phantom variable had any effect inside the container; fixed this
+  session, see NEXT MAJOR TASKS item 6.
 - **Cross-repo (UU-BUEM)**: weather ‖ occupancy ‖ buem share pins, CI
   (`.github/workflows/ci.yml`), Docker base (continuumio/miniconda3),
   `infrastructure/env/` layout, and `pip install -e .`. A change to any of
@@ -128,6 +215,9 @@ weather/
 └── src/weather/
     ├── settings.py                # EnvSettings: all *_ env → typed values
     ├── registry.py  cli.py  __main__.py
+    ├── point_query.py             # get_point_weather: single-location T/GHI/
+    │                              # DHI/DNI from already-processed archives
+    │                              # (no pipeline run) -- see NEXT MAJOR TASKS
     ├── common/                    # shared, provider-agnostic
     │   ├── derived_attributes.py  # apply_derived_fields + shared formulas
     │   │                          # (wind_speed, magnus_rh, bolton_rh,
@@ -137,6 +227,16 @@ weather/
     │   ├── solar_position.py      # spencer_zenith (ERA5-Land/MERRA-2; COSMO
     │   │                          # has its own dask-chunked inline version,
     │   │                          # see compute_dni's docstring for why)
+    │   ├── dni_reconstruction.py  # reconstruct_dni_dhi: shared pvlib DIRINT/
+    │   │                          # DISC point-of-use decomposition, used by
+    │   │                          # point_query.py + both dni_pointwise.py's
+    │   ├── geo_lookup.py          # find_nearest_cell: COSMO's non-regular
+    │   │                          # grid (used by point_query.py)
+    │   ├── cli_flags.py           # add_cleanup_flag/add_resume_flag/
+    │   │                          # add_skip_download_flag/
+    │   │                          # add_skip_decompress_flag -- the one
+    │   │                          # place every test_<provider>_*.py wires
+    │   │                          # its shared argparse flags from
     │   ├── download.py            # https/ftp atomic, checksums
     │   ├── decompress.py          # bz2 helpers (lbzip2/pbzip2/python)
     │   ├── parallel.py            # run_parallel (thread/process pools)
@@ -192,9 +292,16 @@ config.py (EnvSettings→dict) · downloaded_attributes.py (raw-attr DICT) ·
 naming.py (filenames/URLs; COSMO) · downloader.py (`BaseDownloader`) ·
 download.py (orchestration) · decompress[or].py (`BaseDecompressor`; COSMO
 bz2 only) · transform.py (raw→analysis-ready) · export.py (NetCDF, zlib
-complevel=1, float32) · pipeline.py (wire phases; idempotent) ·
-percentile_index.py (standalone KS-distance P10/P50/P90 script; optional) ·
-`__init__.py` (façade).
+complevel=1, float32) · pipeline.py (`run_pipeline(year, months=None,
+...) -> list[Path]`; wire phases; per-month resume; idempotent — same
+shape across all three providers as of this session, see NEXT MAJOR
+TASKS item 6) · percentile_index.py (standalone KS-distance P10/P50/P90
+script; optional) · `__init__.py` (façade; CLI adapter absorbs
+COSMO-flavoured `weather run` kwargs it doesn't need, matching
+`ERA5LandProvider`/`MERRA2Provider`). Every `test_<provider>_
+{one_month,one_year,multi_year}.py` is a thin CLI shim over its
+provider's `run_pipeline()` — no pipeline logic in `tests/` itself;
+shared flags come from `common/cli_flags.py`.
 
 ## Providers at a glance (from source)
 
@@ -246,10 +353,13 @@ percentile_index.py (standalone KS-distance P10/P50/P90 script; optional) ·
   zenith (isolates solar-position precision) and, for reference only,
   pvlib DIRINT (a GHI-only decomposition — the wrong tool for COSMO,
   since its DHI is already known, but the only option ERA5-Land/MERRA-2
-  have; see `docs/dni_methodology.md` sec 11). COSMO's exported NetCDFs
-  carry no lat/lon (raw GRIBs already cleaned up, no CONST file) — the
-  script reconstructs it from the published rotated-pole grid definition
-  (best-effort, not verified against DWD's CONST file). COSMO RH
+  have; see `docs/dni_methodology.md` sec 11). This script still
+  reconstructs COSMO's lat/lon analytically from the rotated-pole grid
+  definition (best-effort, not verified against DWD's CONST file) — it
+  has not been switched over to the real per-cell coordinates
+  `transform.py` now retains (see NEXT MAJOR TASKS item 5), since the
+  already-completed COSMO 2018 archive this script reads predates that
+  fix. COSMO RH
   (`RELHUM_2M`, wired end-to-end via `downloaded_attributes.py`'s
   `role`/`canonical_name` fields and `transform.build_month_dataset`)
   and MERRA-2 snowfall/snow-depth (`PRECSNOLAND`/`SNODP`, the `lnd`
@@ -290,12 +400,12 @@ this repo has already cropped to the country it needs.
   lookup): subprocess wrapper around `cdo sellonlatbox`, atomic tmp-file
   and rename like `common/decompress.py`. **Works today for ERA5-Land
   and MERRA-2** output NetCDFs (regular, CF-compliant lat/lon grid).
-  **Does not work for COSMO-REA6 yet** — its production export has no
-  lat/lon at all (only rotated-pole `rlat`/`rlon` dims; cfgrib writes
-  2-D WGS84 lat/lon during transform, but only the experimental/unused
-  `compute_dni()` diagnostic reads them, and the real assembly path
-  drops them before export). Fixing that needs a COSMO export change,
-  not attempted here — see `.claude/open.md`.
+  **Does not yet work for COSMO-REA6** — `transform.py` now retains the
+  2-D WGS84 lat/lon cfgrib decodes (previously dropped by
+  `_strip_scalar_coords` before export; see NEXT MAJOR TASKS item 5 and
+  `.claude/open.md`), but the already-completed COSMO archive predates
+  that fix and still has no lat/lon at all — needs a transform+export
+  rerun before `weather geo crop` can be tried against it.
 - **Not wired into any provider's `pipeline.py`.** `weather geo crop` is
   a standalone post-processing step run against an already-exported
   output file, by design — ask before auto-wiring it into `run_pipeline()`.
@@ -320,9 +430,12 @@ this repo has already cropped to the country it needs.
    entrypoint.** e.g. `COSMO_CLEANUP`/`ERA5_CLEANUP`/`MERRA_CLEANUP`
    (`EnvSettings.*_cleanup()` -> each `config.py`'s `cfg["cleanup"]`) is
    the single default every `pipeline.py`'s `run_pipeline(cleanup: bool
-   | None = None, ...)` and every `test_<provider>_one_month/one_year/
-   multi_year.py`'s own `--cleanup`/`--no-cleanup` CLI flag resolves
-   from; same pattern for `*_FROM_YEAR`/`*_TO_YEAR`
+   | None = None, ...)` resolves from, and every `test_<provider>_
+   one_month/one_year/multi_year.py`'s own positive `--cleanup` CLI flag
+   (declared via the shared `common/cli_flags.add_cleanup_flag()` —
+   the one place that argparse wiring happens, so no script can drift
+   onto a different flag polarity/name) resolves from too; same pattern
+   for `*_FROM_YEAR`/`*_TO_YEAR`
    (`EnvSettings.*_from_year()`/`*_to_year()`) on the three
    `multi_year.py` scripts' `--from-year`/`--to-year` defaults — change
    the env var once, every entrypoint picks it up; the CLI flag still
