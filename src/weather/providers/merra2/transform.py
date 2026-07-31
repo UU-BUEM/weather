@@ -71,14 +71,18 @@ logger = logging.getLogger(__name__)
 def _convert_units(ds: xr.Dataset) -> xr.Dataset:
     """Apply the unit conversions declared in ``downloaded_attributes``.
 
-    ``T2M`` (Kelvin -> Celsius) and ``PRECSNOLAND`` (kg/m^2/s ->
-    kg/m^2/h, matching COSMO/ERA5-Land's snowfall convention); every
-    other raw attribute is already in its target unit.
+    ``T2M``/``T2MDEW`` (Kelvin -> Celsius) and ``PRECSNOLAND``
+    (kg/m^2/s -> kg/m^2/h, matching COSMO/ERA5-Land's snowfall
+    convention); every other raw attribute is already in its target
+    unit.
     """
     out = ds
     if "T2M" in out:
         out["T2M"] = out["T2M"] - 273.15
         out["T2M"].attrs["units"] = "degC"
+    if "T2MDEW" in out:
+        out["T2MDEW"] = out["T2MDEW"] - 273.15
+        out["T2MDEW"].attrs["units"] = "degC"
     if "PRECSNOLAND" in out:
         out["PRECSNOLAND"] = out["PRECSNOLAND"] * 3600.0
         out["PRECSNOLAND"].attrs["units"] = "kg/m^2/h"
@@ -181,8 +185,9 @@ def build_monthly_dataset(
         Daily ``rad`` collection files (``SWGDN``, ``ALBEDO``) for this
         month, one per day.
     slv_paths : list[Path]
-        Daily ``slv`` collection files (``T2M``, ``U/V`` winds at 2/10/50 m,
-        ``PS``, ``QV2M``) for this month, one per day.
+        Daily ``slv`` collection files (``T2M``, ``T2MDEW``, ``U/V``
+        winds at 2/10/50 m, ``PS``, ``QV2M``) for this month, one per
+        day.
     lnd_paths : list[Path]
         Daily ``lnd`` collection files (``SNODP``, ``PRECSNOLAND``) for
         this month, one per day.
@@ -276,6 +281,42 @@ def build_monthly_dataset(
     # _compute_rh, not inside _convert_units).
     if "T2M" in ds:
         ds = ds.rename({"T2M": "T"})
+
+    # Dew point: MERRA-2's native 'T2MDEW' (free within the
+    # already-fetched slv collection) renamed to canonical 'T_DEW',
+    # matching COSMO's derived T_DEW (inverse Magnus-Tetens) and
+    # ERA5-Land's renamed d2m. Directly measured/assimilated here too,
+    # like ERA5-Land's -- no formula needed.
+    if "T2MDEW" in ds:
+        ds = ds.rename({"T2MDEW": "T_DEW"})
+
+    # 10/2/50 m wind components: canonical 'U_10M'/'V_10M' matches
+    # COSMO's native names and ERA5-Land's renamed 'u10'/'v10' (see
+    # era5_land/transform.py) and the already-shared 'WS_10M' scalar's
+    # naming style. U2M/V2M/U50M/V50M have no cross-provider equivalent
+    # (COSMO/ERA5-Land don't fetch 2 m/50 m wind) but get the same
+    # underscore style applied for internal consistency.
+    _wind_renames = {
+        "U10M": "U_10M", "V10M": "V_10M",
+        "U2M": "U_2M", "V2M": "V_2M",
+        "U50M": "U_50M", "V50M": "V_50M",
+    }
+    ds = ds.rename({k: v for k, v in _wind_renames.items() if k in ds})
+
+    # Snow depth: COSMO's H_SNOW and MERRA-2's SNODP are both physical
+    # snow depth in meters (directly comparable) -- canonical
+    # 'SNOW_DEPTH' unifies them. ERA5-Land's 'sd' is a DIFFERENT
+    # physical quantity (water-equivalent depth) and is intentionally
+    # NOT given this name (see era5_land/transform.py).
+    if "SNODP" in ds:
+        ds = ds.rename({"SNODP": "SNOW_DEPTH"})
+
+    # Snowfall: canonical 'SNOWFALL' matches ERA5-Land's renamed 'sf'
+    # and COSMO's combined SNOW_CON+SNOW_GSP (see cosmo_rea6/transform
+    # .py's compute_snowfall) -- all three are the same physical
+    # quantity (accumulated mass of solid precipitation, kg/m^2/h).
+    if "PRECSNOLAND" in ds:
+        ds = ds.rename({"PRECSNOLAND": "SNOWFALL"})
 
     # Spatial dims: COSMO/ERA5-Land use (y, x); MERRA-2 arrives on
     # (lat, lon).  Stash geographic lat/lon as coordinates, then rename

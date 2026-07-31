@@ -174,28 +174,209 @@
   default Arctic-edge cell (70.5N/25E, June): RH now real values (44.6-
   99.1%, mean 78.0%, 0% NaN, was 100% NaN before this rerun), DNI/GHI
   within physical bounds. See the cross-provider live-rerun entry below.
-- [cosmo_rea6] ALBEDO — the downstream PV consumer that motivated this
-  question (`pysam-photovoltaic-energy-simulation`, `scripts/main.py`)
-  turned out NOT to need a real optical albedo field at all: it derives
-  a crude threshold albedo purely from *snow depth*
-  (`0.6 if snow_depth_cm > 1 else 0.2`, fed from MERRA-2's `SNODP`).
-  COSMO already has the equivalent field — `H_SNOW` (physical snow
-  depth, meters, `role: "passthrough"`) — downloaded since the original
-  run, so **no new attribute or code was needed** to satisfy this
-  consumer. A *real*, physically-derived COSMO albedo remains a
-  documented option if some future consumer needs true optical albedo
-  rather than a snow-depth proxy: DWD's full parameter table
-  (`ParameterTables_REA6.pdf`) lists `SOBS_RAD` (net shortwave,
-  instantaneous — NOT `ASOB_S`, its average-type sibling), giving
-  `albedo = ((SWDIRS_RAD+SWDIFDS_RAD) - SOBS_RAD) / (SWDIRS_RAD+
-  SWDIFDS_RAD)`. Deliberately not built — no confirmed consumer needs it
-  today. `compare_providers.py` now compares `SNOW_DEPTH` across all
-  three providers (COSMO `H_SNOW`, MERRA-2 `SNODP` — both physical
-  depth in m and directly comparable; ERA5-Land `sd` — water-equivalent
-  depth, NOT directly comparable without a density conversion, see that
-  module's docstring).
+- [cosmo_rea6] ALBEDO — DONE (code, 2026-07-26), reversing the earlier
+  "deliberately not built" call. The downstream PV consumer that first
+  raised this (`pysam-photovoltaic-energy-simulation`, `scripts/main.py`)
+  was re-checked against its *live* source rather than memory: its
+  `alb` (PySAM's ground-reflectance transposition input) is still a
+  crude threshold (`0.6 if snow_depth_cm > 1 else 0.2`, from MERRA-2's
+  `SNODP`) — confirmed neither `pysam` nor `merra2-energy-pipeline`
+  reads any provider's real albedo field today. COSMO's `H_SNOW` proxy
+  (see below) was always sufficient for *that* threshold. What changed:
+  the user plans to refactor `pysam` to use real reanalysis albedo for
+  `alb` instead (a genuine accuracy improvement for that specific
+  ground-reflectance parameter — a different physical mechanism than
+  the snow-on-panel coverage loss the same file models separately from
+  snow depth/snowfall, which stays unchanged). That tipped the earlier
+  "not built, no confirmed consumer" call: added `SOBS_RAD` (net
+  shortwave, instantaneous — NOT `ASOB_S`) to
+  `downloaded_attributes.py`; `transform.compute_albedo` derives
+  `ALBEDO = (GHI - SOBS_RAD) / GHI` (`GHI = SWDIRS_RAD + SWDIFDS_RAD`),
+  NaN at night, matching MERRA-2's own `ALBEDO` NaN-at-night behavior.
+  Also renamed ERA5-Land's `fal` → `ALBEDO` (see `## cross-provider`
+  below) so all three providers share one canonical field name.
+  **Not yet live-tested** — needs a COSMO rerun (one new raw attribute)
+  before the next bulk run; a 2017-03 single-month test is planned
+  first. `compare_providers.py` still compares `SNOW_DEPTH` across all
+  three providers (ERA5-Land's `sd` — water-equivalent depth, NOT
+  directly comparable without a density conversion, see that module's
+  docstring) — unaffected by the ALBEDO addition, kept for the
+  snow-loss-on-panel side of the model. Renamed alongside ALBEDO in the
+  same pass: `H_SNOW`'s canonical name -> `SNOW_DEPTH` (matches
+  MERRA-2's renamed `SNODP`), and `SNOW_CON`+`SNOW_GSP` -> one combined
+  derived `SNOWFALL` field (`transform.compute_snowfall`) matching
+  MERRA-2's renamed `PRECSNOLAND`/ERA5-Land's renamed `sf` — see
+  `## cross-provider`'s full naming-unification entry for the complete
+  picture across all three providers.
+
+## cross-repo
+
+- [harmonization] **Idea, not started (2026-07-30)**: a small shared
+  "harmonization" package (env.yml/pyproject.toml/CI-workflow scaffolding)
+  that weather/occupancy/buem would each conda-install from, instead of
+  today's approach — every shared pin or fix (e.g. the numpy/pandas
+  floor-only convention, the `libblas=*=*openblas` fix for the mkl+cupy
+  Windows crash, python>=3.12 baseline) gets hand-copied across all three
+  repos' own env files and `.github/agents/uu-buem-align.agent.md`'s
+  table by hand each time, which is exactly how this repo's numpy/pandas
+  caps drifted out of sync in the first place. Would live in its own repo
+  under UU-BUEM. Not designed or scoped yet — user is considering it; ask
+  before acting if this comes up again.
 
 ## cross-provider
+
+- [all] DONE (2026-07-26): full cross-provider attribute-naming
+  unification, user explicitly signed off on renaming already-completed
+  archives' schemas (superseding the earlier "not touched this session,
+  needs an explicit decision" note). All three providers now share one
+  canonical name per physical quantity, extending the pattern already
+  used for `T`/`GHI`/`DHI`/`RH`/`WS_10M`:
+  - **ALBEDO**: ERA5-Land's `fal` renamed (see `## cosmo_rea6`'s ALBEDO
+    entry for COSMO's new derived field). `asn` (ERA5-Land's narrower
+    snow-only diagnostic, no cross-provider equivalent) intentionally
+    keeps its cfgrib short name, unrenamed.
+  - **PS**: ERA5-Land's `sp` renamed (COSMO/MERRA-2 already `PS`).
+  - **U_10M/V_10M**: canonical form chosen to match COSMO's native
+    names and the already-shared `WS_10M`'s underscore style.
+    ERA5-Land's `u10`/`v10` and MERRA-2's `U10M`/`V10M` renamed.
+    MERRA-2's `U2M`/`V2M`/`U50M`/`V50M` (no cross-provider equivalent —
+    COSMO/ERA5-Land don't fetch 2m/50m wind) renamed to `U_2M`/`V_2M`/
+    `U_50M`/`V_50M` too, for internal consistency.
+  - **SNOW_DEPTH**: COSMO's `H_SNOW` and MERRA-2's `SNODP` are the same
+    physical quantity (physical depth in m) — both renamed. ERA5-Land
+    was originally assessed as having a genuinely different quantity
+    (`sd`, water-equivalent depth) and left deliberately unrenamed —
+    **that assessment was wrong, corrected 2026-07-30, see below.**
+  - **SNOWFALL**: MERRA-2's `PRECSNOLAND` and ERA5-Land's `sf` renamed.
+    COSMO previously exported `SNOW_CON`/`SNOW_GSP` as two separate
+    passthrough fields — now combined into one derived `SNOWFALL`
+    (`transform.compute_snowfall`, role changed `passthrough`->
+    `formula`), matching the other two providers' single-field shape.
+  - **Dewpoint checked, not added**: confirmed via DWD's real
+    `ParameterTables_REA6.pdf` that COSMO has no dewpoint field at all
+    (not just "not downloaded" — genuinely absent from the upstream
+    catalog). MERRA-2's GES DISC catalog DOES have `T2MDEW` (2m dew
+    point) in the same `slv` collection already fetched — a free
+    addition if ever wanted, not added without a confirmed need.
+  - **Backward compatibility**: `point_query.py` (`_pressure_series`,
+    mirroring the existing `_temperature_series` pattern),
+    `compare_providers.py`, and `verify_merra2_months.py`'s
+    `_PLAUSIBLE_RANGE` all try the new canonical name first, falling
+    back to the old raw name — so all three keep working against the
+    already-completed 2018/46-year archives (old names on disk) AND
+    any future rerun (new names) without modification. A real latent
+    bug was caught and fixed in this pass: `point_query.py`'s
+    `_get_point_era5_land` had `pressure_var="sp"` hardcoded with NO
+    fallback — the `PS` rename would have silently dropped pressure
+    from DNI/DHI reconstruction for any future ERA5-Land archive.
+  - **T_DEW (dew point) added, 2026-07-26.** Verified 100% before
+    building anything: fetched DWD's real `hourly/2D/` directory
+    listing directly (not just the parameter table PDF) — confirmed no
+    dew-point field, and no better derivation available either (`QV_2M`
+    is listed there too, but using it would need a brand-new download
+    for no accuracy gain over deriving from `T_2M`+`RELHUM_2M`, both
+    already fetched). Implemented as `dewpoint_from_rh()` in
+    `common/derived_attributes.py` — the algebraic inverse of the
+    already-existing `magnus_rh()` (same `a=17.625, b=243.04`
+    constants), cross-checked against a standard meteorological
+    reference independent of the in-repo derivation (±0.35°C accuracy,
+    T in [-40,50]°C, Alduchov & Eskridge 1996). COSMO's
+    `transform.compute_dewpoint` calls it (free — no new attribute).
+    ERA5-Land's native `d2m` renamed to `T_DEW` (measured, not
+    derived). MERRA-2 previously had no dewpoint at all; added
+    `T2MDEW` as a new raw attribute (free — same `slv` collection
+    already fetched for `T2M`/`QV2M`/winds/`PS`), renamed to `T_DEW`.
+    All three providers now share one canonical dew-point field name.
+  - **COSMO verified live (2026-07-26)**: full `test_cosmo_one_month.py
+    --year 2017 --month 3` run against real DWD data (dev machine, 22
+    cores, `--ncores 12`) — 11/11 downloads verified, 744 timesteps,
+    all 11 output variables present with the new canonical names.
+    `T_DEW > T` physical-impossibility check: 0 violations across
+    ~520M finite (time, y, x) triples. `ALBEDO`: bounded to [0.047,
+    0.829] (within [0,1]), exactly 100% NaN wherever GHI<=1 W/m^2
+    (night-mask working correctly — the `RuntimeWarning: invalid value
+    /divide by zero` logged during the intermediate divide is expected
+    and harmless, masked out by `.where(ghi > 1.0)` before it reaches
+    the output; confirmed zero `inf`/leaked-NaN in the final array).
+    `SNOWFALL`: non-negative, max 14.7 kg/m^2/h. `SNOW_DEPTH`: max
+    40.15 m, matching the ALREADY-DOCUMENTED June 2018 domain-stats max
+    of 40.00 m for the same underlying `H_SNOW` field (a known
+    permanent glacier/ice-sheet cell in the domain — not a new
+    anomaly). `T_DEW`'s extreme minimum (-64.4°C) traced to a genuine
+    `RH=0.062%` reading at a Sinai/Red Sea desert-margin cell
+    (28.39N/33.84E) — COSMO's domain edge, same pattern as the
+    already-documented Saharan-margin temperature extremes elsewhere in
+    this codebase, not a formula bug (the formula is mathematically
+    consistent with that input; the T_DEW>T check already confirms
+    zero violations). DNI outlier report: 0 cells >= 1400 W/m^2.
+  - **MERRA-2 verified live (2026-07-30)**: `test_merra2_one_month.py
+    --year 2018 --month 3`, fresh GES DISC download (~52s total on the
+    dev machine) — all 16 variables present incl. `T_DEW`/`U_50M`/
+    `V_50M`. Real, non-bug finding: MERRA-2's native `T2MDEW` violates
+    `T_DEW <= T` in ~3.2% of values (confirmed present in the raw
+    downloaded file itself, not introduced by this pipeline) — see
+    `.claude/merra2/merra2_context.md` for the full writeup and the
+    cross-provider contrast (COSMO's derived `T_DEW`: 0 violations by
+    construction; ERA5-Land's native `d2m`: 0 violations, checked the
+    same day against real data).
+  - **ERA5-Land not yet live-tested** for the naming-unification pass
+    (though its native `d2m` was independently checked this same
+    session as part of the `T2MDEW` investigation above, using the
+    already-existing real 2018-03 output — 0 `d2m > T` violations
+    across ~62M points).
+- [all] DONE (2026-07-30): three more fixes/checks against real local
+  data (all three providers already have real 2018-03 output on the
+  dev machine, used for this cross-check):
+  - **Real bug found + fixed: COSMO now keeps `U_10M`/`V_10M`** in its
+    output alongside `WS_10M`, matching ERA5-Land/MERRA-2 (both always
+    kept the raw components too) — COSMO used to be the only one of
+    the three that discarded them after computing the scalar speed.
+    Not previously documented anywhere; found only when asked to
+    verify all three providers produce identical output.
+  - **Real bug found + fixed: ERA5-Land's `snow_depth` entry in
+    `downloaded_attributes.py` was mislabeled.** It claimed `e5l_name:
+    "sd"` and described the field as water-equivalent depth, genuinely
+    different from COSMO/MERRA-2's physical depth — the reasoning the
+    2026-07-26 naming pass used to deliberately leave it unrenamed.
+    Verified via three independent sources that this was wrong: (1) the
+    real CDS request payload (user-supplied) lists `snow_depth`, not
+    `snow_depth_water_equivalent`; (2) the raw downloaded GRIB decodes
+    to `GRIB_shortName 'sde'`, `long_name 'Snow depth'` — `'sd'` is the
+    OTHER, water-equivalent CDS variable, never actually requested;
+    (3) the already-processed 2018-03 output has the variable literally
+    named `sde`. Fixed: `e5l_name` corrected to `"sde"`, description/
+    unit_target/conversion corrected (no conversion needed — already
+    physical meters), and `sde` now renamed to canonical `SNOW_DEPTH`
+    in `transform.py`, achieving genuine 3-way unification after all.
+    The mislabeling never corrupted any actual value (no
+    water-equivalent conversion was ever coded or applied), only the
+    description and the naming decision were wrong. Verified against
+    the real local GRIB + already-processed output (max 33.33 m,
+    identical to the pre-fix number, confirming the fix only changed
+    the label, not the data) and against `build_monthly_dataset()` run
+    directly on the real file. `compare_providers.py`'s docstring and
+    `SNOW_DEPTH` lookup, and `docs/provider_differences.md`'s section 4,
+    corrected to match.
+  - **`asn` explained, checked against both other providers, nothing
+    added.** `asn` = ECMWF's "Snow albedo" (confirmed via real GRIB
+    metadata) — the reflectivity of just the snow-covered surface,
+    distinct from `fal`/`ALBEDO`'s blended whole-grid-cell reflectivity.
+    Checked DWD's real parameter table (COSMO) and GES DISC's
+    `M2T1NXRAD` catalog (MERRA-2, confirmed via the Earth Engine
+    catalog listing) — neither has an equivalent narrower snow-only
+    albedo field. No confirmed consumer needs one; nothing added.
+  - **`QV2M` explained, downstream repos re-checked.** Pure intermediate
+    for deriving RH, nothing else — confirmed by reading
+    `merra2-energy-pipeline/src/data_pipeline/combine.py:199-296`
+    (`_specific_humidity_to_rh`), which independently reimplements the
+    same specific-humidity -> RH conversion `merra2/transform.py
+    ::_compute_rh` already does, for its biomass/geothermal outputs.
+    `pysam` (PV) doesn't reference `QV2M`/humidity at all (grepped,
+    zero hits). COSMO/ERA5-Land's "equivalent" isn't a specific-humidity
+    field — it's simply their own already-unified `RH` (COSMO:
+    `RELHUM_2M` direct; ERA5-Land: dew-point Magnus). Since `RH` is
+    already canonical across all three, this downstream need is already
+    satisfied without adding anything new anywhere.
 - [all] Run audit_imports.py across every provider; enforce global-imports.
 - [all] Keep ruff/flake8/markdownlint clean; honour pyproject.toml/.flake8/
   markdownlint.json/conda_build_config.yml at root.

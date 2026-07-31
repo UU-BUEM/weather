@@ -11,41 +11,42 @@ files (one sheet/file per provider).
 Known, real gaps in the 2018 test dataset this was built against (present
 regardless of which cell/month you pick — not a bug in this script):
 
-* **COSMO-REA6 RH and MERRA-2 SF/SNOW_DEPTH require a re-run to appear.**
-  ``RELHUM_2M`` (COSMO -> ``RH``) and the ``lnd`` collection
-  (``PRECSNOLAND``/``SNODP`` -> MERRA-2's ``SF``/``SNOW_DEPTH``) are both
-  correctly wired end-to-end in code, but only take effect once each
-  provider's 2018 data is regenerated (see ``.claude/open.md`` /
-  ``.claude/merra2/merra2_plan.md`` for the live-rerun status). Columns
-  read NaN against any 2018 NetCDF generated before that rerun.
-* **COSMO-REA6 ALBEDO is deliberately left NaN, by design, not a gap.**
-  A downstream PV consumer (``pysam-photovoltaic-energy-simulation``,
-  ``scripts/main.py``) turned out NOT to use a real optical albedo field
-  at all -- it derives a crude threshold albedo from *snow depth* alone
-  (``0.6 if snow_depth_cm > 1 else 0.2``, fed from MERRA-2's ``SNODP``).
-  That need is what :data:`ATTRS`'s ``SNOW_DEPTH`` column below covers,
-  and COSMO already has an equivalent raw field (``H_SNOW``, physical
-  depth in m, passthrough, downloaded since the original run) -- no new
-  attribute or download was needed. A *real*, physically-derived COSMO
-  albedo remains possible if some other future consumer needs true
-  optical albedo rather than a snow-depth proxy: DWD's full parameter
-  table (``ParameterTables_REA6.pdf`` at
-  ``opendata.dwd.de/climate_environment/REA/COSMO_REA6/``) lists
-  ``SOBS_RAD`` (net shortwave at surface, instantaneous -- matches
-  ``SWDIRS_RAD``/``SWDIFDS_RAD``'s convention; NOT ``ASOB_S``, its
-  "average"-type sibling), giving ``albedo = ((SWDIRS_RAD +
-  SWDIFDS_RAD) - SOBS_RAD) / (SWDIRS_RAD + SWDIFDS_RAD)``. Deliberately
-  NOT built -- no confirmed consumer needs it today.
-* **SNOW_DEPTH is NOT the same physical quantity across providers.**
-  COSMO's ``H_SNOW`` and MERRA-2's ``SNODP`` are both physical snow
-  depth in meters (directly comparable). ERA5-Land's ``sd`` is snow
-  depth in **meters of water equivalent** -- ``downloaded_attributes.py``
-  documents a water-equivalent -> physical-depth conversion (divide by
-  snow density / 1000, or assume a fallback density), but that
-  conversion is not actually implemented anywhere in
-  ``era5_land/transform.py``; ``sd`` passes through raw. Do not compare
-  ERA5-Land's SNOW_DEPTH numerically against the other two without
-  applying that conversion yourself first.
+* **COSMO-REA6 RH/ALBEDO/SNOWFALL and ERA5-Land/MERRA-2's renamed
+  PS/U_10M/V_10M/ALBEDO/SNOWFALL/SNOW_DEPTH all require a re-run to
+  appear under their new names.** ``RELHUM_2M`` (COSMO -> ``RH``,
+  pre-existing), plus the 2026-07-26 additions/renames --
+  COSMO's new ``SOBS_RAD`` -> ``ALBEDO`` and combined
+  ``SNOW_CON``+``SNOW_GSP`` -> ``SNOWFALL``; ERA5-Land's ``sp``/
+  ``u10``/``v10``/``fal``/``sf`` -> ``PS``/``U_10M``/``V_10M``/
+  ``ALBEDO``/``SNOWFALL``; MERRA-2's ``U10M``/``V10M``/``SNODP``/
+  ``PRECSNOLAND`` -> ``U_10M``/``V_10M``/``SNOW_DEPTH``/``SNOWFALL`` --
+  are all correctly wired end-to-end in code, but only take effect once
+  each provider's 2018 data is regenerated (see ``.claude/open.md`` /
+  ``.claude/merra2/merra2_plan.md`` for the live-rerun status). This
+  script's ``load_point_series`` methods fall back to each provider's
+  OLD raw name when the new canonical one is absent, so it keeps
+  working against the pre-existing 2018 archive either way -- no
+  column silently goes NaN just because of the rename itself.
+* **SNOW_DEPTH IS the same physical quantity across all three providers**
+  (corrected 2026-07-30 -- see below). COSMO's ``H_SNOW``, MERRA-2's
+  ``SNODP``, and ERA5-Land's ``sde`` are all physical snow depth in
+  meters, all renamed to canonical ``SNOW_DEPTH``, all directly
+  comparable. A prior version of this docstring (and of
+  ``era5_land/downloaded_attributes.py``'s ``snow_depth`` entry) claimed
+  ERA5-Land's field was **meters of water equivalent** and left it
+  deliberately unrenamed to avoid a "false equivalence" -- that claim
+  was itself wrong. Verified via three independent sources: the actual
+  CDS request payload (variable ``snow_depth``, not ``snow_depth_water_
+  equivalent``), the raw GRIB's decoded metadata (``GRIB_shortName
+  'sde'``, ``long_name 'Snow depth'``, not ``'sd'``), and the
+  already-processed 2018-03 output (variable literally named ``sde``).
+  The mislabeling never affected any actual downloaded/exported VALUE
+  -- no water-equivalent-to-physical conversion was ever coded or
+  applied anywhere, so every number reported under this column, past
+  and present, has always been correct; only the description and
+  cross-provider naming decision were wrong. See
+  ``era5_land/downloaded_attributes.py``'s ``snow_depth`` entry for the
+  full verification trail.
 * **COSMO-REA6's exported NetCDFs carry no lat/lon** (raw GRIBs -- which
   *do* carry real cfgrib-decoded WGS84 lat/lon -- were already deleted by
   the pipeline's cleanup step, and the DWD ``COSMO_REA6_CONST`` static
@@ -125,8 +126,8 @@ ATTRS: tuple[str, ...] = (
 _UNITS: dict[str, str] = {
     "GHI": "W/m^2", "DHI": "W/m^2", "DNI": "W/m^2",
     "T": "degC", "RH": "%", "SF": "kg/m^2/h", "ALBEDO": "0-1",
-    "SNOW_DEPTH": "m (see caveat: not the same physical quantity "
-    "across providers)",
+    "SNOW_DEPTH": "m (same physical quantity across all 3 providers, "
+    "confirmed 2026-07-30 -- see module docstring)",
 }
 
 #: dataviz skill categorical slots 1-3 (blue/orange/aqua) -- pre-validated
@@ -353,13 +354,23 @@ class CosmoAdapter(ProviderAdapter):
             out["DHI"] = pt["DHI"].values
             out["DNI"] = pt["DNI"].values if "DNI" in pt else np.nan
             out["RH"] = pt["RH"].values if "RH" in pt else np.nan
-            if "SNOW_GSP" in pt and "SNOW_CON" in pt:
+            # 'SNOWFALL' (2026-07-26+ rerun) vs the raw pre-rename
+            # SNOW_GSP+SNOW_CON sum (pre-existing 2018 archive).
+            if "SNOWFALL" in pt:
+                out["SF"] = pt["SNOWFALL"].values
+            elif "SNOW_GSP" in pt and "SNOW_CON" in pt:
                 out["SF"] = pt["SNOW_GSP"].values + pt["SNOW_CON"].values
             else:
                 out["SF"] = np.nan
-            # No native ALBEDO field -- deliberate, see module docstring.
-            out["ALBEDO"] = np.nan
-            out["SNOW_DEPTH"] = pt["H_SNOW"].values if "H_SNOW" in pt else np.nan
+            # 'ALBEDO' (2026-07-26+ rerun, derived from SOBS_RAD) vs no
+            # field at all (pre-existing 2018 archive, see module docstring).
+            out["ALBEDO"] = pt["ALBEDO"].values if "ALBEDO" in pt else np.nan
+            # 'SNOW_DEPTH' (2026-07-26+ rerun) vs raw 'H_SNOW' (pre-existing
+            # 2018 archive) -- same physical quantity either way.
+            out["SNOW_DEPTH"] = (
+                pt["SNOW_DEPTH"].values if "SNOW_DEPTH" in pt
+                else pt["H_SNOW"].values if "H_SNOW" in pt else np.nan
+            )
         return out[list(ATTRS)]
 
     def dni_method_comparison(
@@ -426,9 +437,11 @@ class Era5Adapter(ProviderAdapter):
             pt = ds.isel(y=cell.iy, x=cell.ix)
             idx = pd.DatetimeIndex(pt["time"].values).tz_localize("UTC")
             ghi = pd.Series(np.asarray(pt["GHI"].values), index=idx)
+            # 'PS' (2026-07-26+ rerun) vs raw 'sp' (pre-existing archive).
+            _pressure_var = "PS" if "PS" in pt else "sp"
             pressure = (
-                pd.Series(np.asarray(pt["sp"].values), index=idx)
-                if "sp" in pt else None
+                pd.Series(np.asarray(pt[_pressure_var].values), index=idx)
+                if _pressure_var in pt else None
             )
             dd = _era5_extract_dni_dhi(ghi, cell.lat, cell.lon, pressure=pressure)
             out = pd.DataFrame(index=idx)
@@ -437,15 +450,30 @@ class Era5Adapter(ProviderAdapter):
             out["GHI"] = ghi.to_numpy()
             out["DHI"] = dd["DHI"].to_numpy()
             out["DNI"] = dd["DNI"].to_numpy()
-            out["SF"] = pt["sf"].values if "sf" in pt else np.nan
-            # "fal" = total surface albedo (bare land + snow), comparable
-            # to MERRA-2's ALBEDO. "asn" (snow-only albedo) is a
-            # different quantity and NOT used here.
-            out["ALBEDO"] = pt["fal"].values if "fal" in pt else np.nan
-            # "sd" = snow depth in m of WATER EQUIVALENT, not physical
-            # depth -- not directly comparable to COSMO/MERRA-2's
-            # physical-depth SNOW_DEPTH; see module docstring caveat.
-            out["SNOW_DEPTH"] = pt["sd"].values if "sd" in pt else np.nan
+            # 'SNOWFALL' (2026-07-26+ rerun) vs raw 'sf' (pre-existing archive).
+            out["SF"] = (
+                pt["SNOWFALL"].values if "SNOWFALL" in pt
+                else pt["sf"].values if "sf" in pt else np.nan
+            )
+            # "fal"/renamed "ALBEDO" = total surface albedo (bare land +
+            # snow), comparable to MERRA-2's ALBEDO. "asn" (snow-only
+            # albedo) is a different quantity and NOT used here.
+            out["ALBEDO"] = (
+                pt["ALBEDO"].values if "ALBEDO" in pt
+                else pt["fal"].values if "fal" in pt else np.nan
+            )
+            # 'SNOW_DEPTH' (2026-07-30+ rerun) vs raw 'sde' (pre-existing
+            # archive) -- confirmed 2026-07-30 this is real physical
+            # depth in meters (GRIB shortName 'sde'), directly comparable
+            # to COSMO/MERRA-2's SNOW_DEPTH; a prior version of this
+            # script incorrectly read 'sd' (which was never actually the
+            # downloaded field) and called it water-equivalent. See
+            # era5_land/downloaded_attributes.py's 'snow_depth' entry
+            # for the full verification trail.
+            out["SNOW_DEPTH"] = (
+                pt["SNOW_DEPTH"].values if "SNOW_DEPTH" in pt
+                else pt["sde"].values if "sde" in pt else np.nan
+            )
         return out[list(ATTRS)]
 
 
@@ -485,14 +513,23 @@ class Merra2Adapter(ProviderAdapter):
             out["GHI"] = ghi.to_numpy()
             out["DHI"] = dd["DHI"].to_numpy()
             out["DNI"] = dd["DNI"].to_numpy()
-            # PRECSNOLAND (kg/m^2/h after transform.py's unit conversion)
-            # matches COSMO's SNOW_GSP+SNOW_CON / ERA5-Land's sf convention.
-            # NaN on data generated before the lnd collection was added.
+            # 'SNOWFALL' (2026-07-26+ rerun) vs raw 'PRECSNOLAND'
+            # (pre-existing archive, kg/m^2/h after transform.py's unit
+            # conversion either way) -- matches COSMO's SNOW_GSP+SNOW_CON /
+            # ERA5-Land's SNOWFALL/sf convention. NaN on data generated
+            # before the lnd collection was added.
             out["SF"] = (
-                pt["PRECSNOLAND"].values if "PRECSNOLAND" in pt else np.nan
+                pt["SNOWFALL"].values if "SNOWFALL" in pt
+                else pt["PRECSNOLAND"].values if "PRECSNOLAND" in pt
+                else np.nan
             )
             out["ALBEDO"] = pt["ALBEDO"].values if "ALBEDO" in pt else np.nan
-            out["SNOW_DEPTH"] = pt["SNODP"].values if "SNODP" in pt else np.nan
+            # 'SNOW_DEPTH' (2026-07-26+ rerun) vs raw 'SNODP' (pre-existing
+            # archive).
+            out["SNOW_DEPTH"] = (
+                pt["SNOW_DEPTH"].values if "SNOW_DEPTH" in pt
+                else pt["SNODP"].values if "SNODP" in pt else np.nan
+            )
         return out[list(ATTRS)]
 
 

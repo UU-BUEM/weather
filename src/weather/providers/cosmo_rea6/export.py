@@ -1,13 +1,17 @@
 """Export processed COSMO-REA6 data to compressed NetCDF.
 
-Writes the annual :class:`xarray.Dataset` produced by
-:func:`~weather.providers.cosmo_rea6.transform.build_annual_dataset` to a
+Writes the per-month :class:`xarray.Dataset` produced by
+:func:`~weather.providers.cosmo_rea6.transform.build_month_dataset` to a
 single NetCDF-4 file with zlib compression, following CF-1.8 conventions.
+``pipeline.py`` always passes an explicit ``output_path``
+(``COSMO_REA6_<year>_<month>_all_attrs.nc``, matching ERA5-Land/MERRA-2's
+monthly convention); this module's own ``COSMO_REA6_<year>.nc`` default
+below only applies to a direct, path-less call.
 
 Typical usage::
 
     from weather.providers.cosmo_rea6.export import export_netcdf
-    export_netcdf(ds, Path("/data/output/COSMO_REA6_2018.nc"))
+    export_netcdf(ds, Path("/data/output/COSMO_REA6_2018_01_all_attrs.nc"))
 """
 
 from __future__ import annotations
@@ -172,9 +176,11 @@ def export_single_point_csv(
     )
     df.index.name = "datetime"
 
-    # Add WS_10M if present
+    # Add WS_10M/ALBEDO if present
     if "WS_10M" in point:
         df["WS_10M"] = point["WS_10M"].values
+    if "ALBEDO" in point:
+        df["ALBEDO"] = point["ALBEDO"].values
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_path)

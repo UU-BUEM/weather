@@ -1,21 +1,25 @@
 """Transform raw COSMO-REA6 GRIB fields into analysis-ready variables.
 
 Reads decompressed GRIB files with :mod:`xarray` + ``cfgrib``, applies unit
-conversions, computes derived fields (GHI, DHI, WS_10M, DNI), and assembles
-:class:`xarray.Dataset` objects with the COSMO-REA6 rotated-pole coordinates
-and auxiliary WGS84 ``latitude`` / ``longitude`` coordinates.
+conversions, computes derived fields (GHI, DHI, WS_10M, ALBEDO, SNOWFALL,
+T_DEW, DNI), and assembles :class:`xarray.Dataset` objects with the
+COSMO-REA6 rotated-pole coordinates and auxiliary WGS84 ``latitude`` /
+``longitude`` coordinates.
 
 Key conversions and derived variables:
 
-+--------+----------+-------------+----------------------------------+
-| Field  | Raw unit | Output unit | Formula / source                 |
-+========+==========+=============+==================================+
-| T      | K        | °C          | T_2M − 273.15                    |
-| GHI    | W/m²     | W/m²        | SWDIFDS_RAD + SWDIRS_RAD         |
-| DHI    | W/m²     | W/m²        | SWDIFDS_RAD                      |
-| WS_10M | m/s      | m/s         | √(U_10M² + V_10M²)               |
-| DNI    | W/m²     | W/m²        | SWDIRS_RAD / cos(θ_z) [exp.]     |
-+--------+----------+-------------+----------------------------------+
++----------+----------+-------------+----------------------------------+
+| Field    | Raw unit | Output unit | Formula / source                 |
++==========+==========+=============+==================================+
+| T        | K        | °C          | T_2M − 273.15                    |
+| GHI      | W/m²     | W/m²        | SWDIFDS_RAD + SWDIRS_RAD         |
+| DHI      | W/m²     | W/m²        | SWDIFDS_RAD                      |
+| WS_10M   | m/s      | m/s         | √(U_10M² + V_10M²)               |
+| ALBEDO   | 1        | 1           | (GHI − SOBS_RAD) / GHI           |
+| SNOWFALL | kg/m²    | kg/m²/h     | SNOW_CON + SNOW_GSP              |
+| T_DEW    | -        | °C          | inverse Magnus(T, RELHUM_2M)     |
+| DNI      | W/m²     | W/m²        | SWDIRS_RAD / cos(θ_z) [exp.]     |
++----------+----------+-------------+----------------------------------+
 
 See :func:`compute_dni` for the DNI methodology and
 ``docs/dni_methodology.md`` for a full algorithm comparison
@@ -41,6 +45,7 @@ import numpy as np
 
 from ...common.derived_attributes import (
     DNI_ELEVATION_THRESHOLD_DEG,
+    dewpoint_from_rh,
     dni_from_direct,
     ghi_from_diffuse_direct,
     wind_speed,
@@ -293,6 +298,49 @@ def convert_temperature(
     return da
 
 
+def compute_dewpoint(
+    t_celsius: xarray.DataArray,
+    ds_rh: xarray.Dataset,
+    rh_var: str = "RELHUM_2M",
+) -> xarray.DataArray:
+    """Derive 2 m dew point via the inverse Magnus-Tetens formula.
+
+    COSMO-REA6 has no native dew-point field at all (confirmed via
+    DWD's real ``hourly/2D/`` directory listing -- not just "not
+    downloaded"), but it does have both ``T_2M`` and ``RELHUM_2M``
+    already, so this is a free derivation: no new attribute, no new
+    download. See :func:`~weather.common.derived_attributes.
+    dewpoint_from_rh` for the formula and its verification.
+
+    Parameters
+    ----------
+    t_celsius : xarray.DataArray
+        Temperature, ALREADY Celsius-converted (i.e. the output of
+        :func:`convert_temperature`, not the raw Kelvin ``T_2M``
+        dataset) -- the Magnus-Tetens formula expects Celsius.
+    ds_rh : xarray.Dataset
+        Dataset with the raw ``RELHUM_2M`` field (%).
+
+    Returns
+    -------
+    xarray.DataArray
+        Dew point in degC.
+    """
+    rh = _resolve_var(ds_rh, rh_var)
+    td = dewpoint_from_rh(t_celsius, rh)
+    td.attrs = {
+        "units": "degC",
+        "long_name": "Dew point temperature at 2m",
+        "description": (
+            "Derived from T_2M and RELHUM_2M via the inverse "
+            "August-Roche-Magnus formula (COSMO has no native "
+            "dew-point field)."
+        ),
+        "derivation": "T_DEW = dewpoint_from_rh(T, RELHUM_2M)",
+    }
+    return td
+
+
 def compute_ghi(
     ds_diffuse: xarray.Dataset,
     ds_direct: xarray.Dataset,
@@ -353,6 +401,91 @@ def compute_dhi(
     dhi = _resolve_var(ds_diffuse, diffuse_var).clip(min=0)
     dhi.attrs = {"units": "W/m2", "long_name": "Diffuse Horizontal Irradiance"}
     return dhi
+
+
+def compute_albedo(
+    ds_diffuse: xarray.Dataset,
+    ds_direct: xarray.Dataset,
+    ds_net: xarray.Dataset,
+    diffuse_var: str = "SWDIFDS_RAD",
+    direct_var: str = "SWDIRS_RAD",
+    net_var: str = "SOBS_RAD",
+) -> xarray.DataArray:
+    """Compute surface albedo from net vs. incoming shortwave radiation.
+
+    ``albedo = (GHI - SOBS_RAD) / GHI`` where ``GHI = SWDIRS_RAD +
+    SWDIFDS_RAD`` (clipped to ``[0, inf)`` before summing, matching
+    :func:`compute_ghi`) and ``SOBS_RAD`` is net shortwave at the
+    surface (incoming minus reflected) -- **not** ``ASOB_S``, its
+    average-type sibling (see ``downloaded_attributes.py``'s
+    ``SOBS_RAD`` entry). Matches ERA5-Land's ``fal``/MERRA-2's
+    ``ALBEDO`` canonical output name for cross-provider parity.
+
+    Undefined at night (GHI -> 0, 0/0): cells where GHI is below a
+    small W/m^2 floor are set to NaN rather than a spurious ratio --
+    the same convention MERRA-2's native ``ALBEDO`` already exhibits
+    (~47% NaN, all night hours; see ``.claude/merra2/merra2_plan.md``),
+    so this isn't a new cross-provider inconsistency to document.
+
+    Returns
+    -------
+    xarray.DataArray
+        Albedo, dimensionless fraction, clipped to ``[0, 1]``; NaN at
+        night.
+    """
+    diffuse = _resolve_var(ds_diffuse, diffuse_var)
+    direct = _resolve_var(ds_direct, direct_var)
+    net = _resolve_var(ds_net, net_var)
+
+    ghi = ghi_from_diffuse_direct(diffuse, direct)
+    albedo = ((ghi - net) / ghi).clip(0.0, 1.0)
+    albedo = albedo.where(ghi > 1.0)  # night guard: undefined at GHI ~ 0
+    albedo.attrs = {
+        "units": "1",
+        "long_name": "Surface albedo",
+        "description": (
+            "(GHI - SOBS_RAD) / GHI, where GHI = SWDIRS_RAD + "
+            "SWDIFDS_RAD and SOBS_RAD is net shortwave at the surface. "
+            "NaN at night (GHI <= 1 W/m^2)."
+        ),
+        "derivation": "ALBEDO = (GHI - SOBS_RAD) / GHI",
+    }
+    return albedo
+
+
+def compute_snowfall(
+    ds_con: xarray.Dataset,
+    ds_gsp: xarray.Dataset,
+    con_var: str = "SNOW_CON",
+    gsp_var: str = "SNOW_GSP",
+) -> xarray.DataArray:
+    """Combine convective + stratiform snow into one SNOWFALL field.
+
+    ``SNOWFALL = SNOW_CON + SNOW_GSP`` (both already accumulated mass
+    over the hour, kg/m^2 == kg/m^2/h). Canonical name matches
+    ERA5-Land's renamed ``sf``/MERRA-2's renamed ``PRECSNOLAND`` -- all
+    three are the same physical quantity (accumulated mass of solid
+    precipitation). Clipped to ``[0, inf)``: negative values are a
+    GRIB artefact, not physically possible for either input.
+
+    Returns
+    -------
+    xarray.DataArray
+        Combined snowfall, kg/m^2/h.
+    """
+    con = _resolve_var(ds_con, con_var).clip(min=0)
+    gsp = _resolve_var(ds_gsp, gsp_var).clip(min=0)
+    snowfall = (con + gsp).rename("SNOWFALL")
+    snowfall.attrs = {
+        "units": "kg/m^2/h",
+        "long_name": "Snowfall (accumulated mass, convective + stratiform)",
+        "description": (
+            "SNOW_CON (convective) + SNOW_GSP (stratiform), both "
+            "accumulated over the hour."
+        ),
+        "derivation": "SNOWFALL = SNOW_CON + SNOW_GSP",
+    }
+    return snowfall
 
 
 def compute_wind_speed(
@@ -1140,9 +1273,30 @@ def build_month_dataset(
     WS = _strip_scalar_coords(
         compute_wind_speed(datasets["U_10M"], datasets["V_10M"])
     )
+    ALBEDO = _strip_scalar_coords(
+        compute_albedo(
+            datasets["SWDIFDS_RAD"], datasets["SWDIRS_RAD"],
+            datasets["SOBS_RAD"],
+        )
+    )
+    SNOWFALL = _strip_scalar_coords(
+        compute_snowfall(datasets["SNOW_CON"], datasets["SNOW_GSP"])
+    )
+    T_DEW = _strip_scalar_coords(compute_dewpoint(T, datasets["RELHUM_2M"]))
+    # Raw 10 m wind components, kept alongside the derived WS_10M scalar
+    # -- matches ERA5-Land/MERRA-2, which both keep their raw U_10M/V_10M
+    # too (this was a real cross-provider inconsistency: COSMO used to
+    # be the only one of the three that discarded them). role="formula"
+    # in ATTRIBUTES (feeds WS_10M) so the generic passthrough_attrs()
+    # loop below skips these; call _passthrough_var directly instead --
+    # it only reads dict metadata, doesn't care about role.
+    U_10M = _passthrough_var(datasets, "U_10M")
+    V_10M = _passthrough_var(datasets, "V_10M")
 
     data_vars: dict[str, xarray.DataArray] = {
-        "T": T, "GHI": GHI, "DHI": DHI, "WS_10M": WS,
+        "T": T, "GHI": GHI, "DHI": DHI, "WS_10M": WS, "ALBEDO": ALBEDO,
+        "SNOWFALL": SNOWFALL, "T_DEW": T_DEW,
+        "U_10M": U_10M, "V_10M": V_10M,
     }
     for attr in passthrough_attrs():
         da = _passthrough_var(datasets, attr)

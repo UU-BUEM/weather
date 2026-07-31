@@ -117,6 +117,23 @@ def _temperature_series(cell: Any, legacy_name: str) -> pd.Series:
     return cell[legacy_name].to_series()
 
 
+def _pressure_series(cell: Any, legacy_name: str) -> pd.Series | None:
+    """Return the Pa pressure Series, tolerating pre-fix archives.
+
+    ERA5-Land and MERRA-2 now both export a canonical ``PS`` column
+    (matching COSMO-REA6); archives produced before that rename carry
+    ERA5-Land's raw ``sp`` instead (MERRA-2 was already ``PS``, so its
+    legacy name is the same as the canonical one -- a harmless no-op
+    lookup). ``None`` if neither is present (falls back to the
+    scalar/no-pressure path in :func:`reconstruct_dni_dhi`).
+    """
+    if "PS" in cell:
+        return cell["PS"].to_series()
+    if legacy_name in cell:
+        return cell[legacy_name].to_series()
+    return None
+
+
 def _get_point_regular_grid(
     latitude: float,
     longitude: float,
@@ -125,7 +142,7 @@ def _get_point_regular_grid(
     *,
     canonical: str,
     filename_glob: str,
-    pressure_var: str,
+    legacy_pressure_var: str,
     legacy_temperature_var: str,
 ) -> pd.DataFrame:
     """Shared point extraction for ERA5-Land/MERRA-2's regular lat/lon grid."""
@@ -144,7 +161,7 @@ def _get_point_regular_grid(
 
     ghi = cell["GHI"].to_series()
     t = _temperature_series(cell, legacy_temperature_var)
-    pressure = cell[pressure_var].to_series() if pressure_var in cell else None
+    pressure = _pressure_series(cell, legacy_pressure_var)
     dni_dhi = reconstruct_dni_dhi(
         ghi,
         float(cell["latitude"]),
@@ -164,7 +181,7 @@ def _get_point_era5_land(
         latitude, longitude, year, data_dir,
         canonical="era5-land",
         filename_glob=f"ERA5_LAND_{year}_??_all_attrs.nc",
-        pressure_var="sp",
+        legacy_pressure_var="sp",
         legacy_temperature_var="t2m",
     )
 
@@ -176,7 +193,7 @@ def _get_point_merra2(
         latitude, longitude, year, data_dir,
         canonical="merra-2",
         filename_glob=f"MERRA2_{year}_??_all_attrs.nc",
-        pressure_var="PS",
+        legacy_pressure_var="PS",
         legacy_temperature_var="T2M",
     )
 

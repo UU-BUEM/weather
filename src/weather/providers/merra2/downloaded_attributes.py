@@ -51,6 +51,22 @@ ATTRIBUTES: dict[str, dict[str, str]] = {
             "(converts Kelvin (K) to Celsius (C))"
         ),
     },
+    "T2MDEW": {
+        "m2_name": "T2MDEW",
+        "collection": "slv",
+        "description": (
+            "2-meter dew point temperature -- free within the "
+            "already-fetched slv request (same collection as T2M); "
+            "canonical output name T_DEW, matching COSMO's derived "
+            "dewpoint and ERA5-Land's renamed d2m"
+        ),
+        "unit_raw": "K",
+        "unit_target": "degC",
+        "conversion": (
+            "subtract 273.15 "
+            "(converts Kelvin (K) to Celsius (C))"
+        ),
+    },
     "QV2M": {
         "m2_name": "QV2M",
         "collection": "slv",

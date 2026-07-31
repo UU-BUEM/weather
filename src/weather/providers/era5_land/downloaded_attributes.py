@@ -77,17 +77,27 @@ ATTRIBUTES: dict[str, dict[str, str]] = {
         "conversion": "none (already in Pascals (Pa))",
     },
     "snow_depth": {
-        "e5l_name": "sd",
+        "e5l_name": "sde",
         "description": (
             "snow depth "
-            "(water equivalent height of the snow pack)"
+            "(instantaneous physical thickness of the snow pack, "
+            "excluding snow on the vegetation canopy)"
         ),
-        "unit_raw": "m of water equivalent",
-        "unit_target": "m of physical snow depth",
+        "unit_raw": "m",
+        "unit_target": "m",
         "conversion": (
-            "divide by (snow_density / 1000.0) or assume fallback "
-            "density (e.g. ~250 kg/m^3) to convert water equivalent "
-            "thickness to physical thickness"
+            "none (already physical depth in meters (m); "
+            "CDS request variable is 'snow_depth' (GRIB shortName "
+            "'sde'), NOT 'snow_depth_water_equivalent' (shortName "
+            "'sd') -- verified 2026-07-30 against the real CDS request "
+            "payload, the raw GRIB's decoded metadata, and the "
+            "already-processed 2018-03 output, all three agreeing. "
+            "A prior version of this entry incorrectly used e5l_name "
+            "'sd' and described this as water-equivalent, which it "
+            "never was -- the mislabeling never affected the actual "
+            "downloaded/exported VALUES (no conversion was ever coded "
+            "or applied), only this description and the variable's "
+            "final output name.)"
         ),
     },
     "snowfall": {

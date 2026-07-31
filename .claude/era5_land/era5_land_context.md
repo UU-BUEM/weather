@@ -13,8 +13,20 @@ t2m, d2m, u10, v10, sp, sde, sf, asn, fal, ssrd.
 ## Outputs (per monthly .nc)
 `ERA5_LAND_<YYYY>_<MM>_all_attrs.nc`, dims `(time, y, x)`, latitude/
 longitude as coord vars (y/x integer indices → matches COSMO for `isel`).
-Vars: T(°C, from t2m), d2m(°C), u10, v10, sp(Pa), sde(m), sf(kg/m²/h),
-asn, fal, GHI(W/m²), RH(%), WS_10M(m/s). ssrd dropped. GRIB_* attrs
+Vars: T(°C, from t2m), T_DEW(°C, renamed from d2m 2026-07-26 — matches
+COSMO's derived T_DEW/MERRA-2's renamed T2MDEW), PS(Pa, renamed from sp
+2026-07-26), U_10M/V_10M(m/s, renamed from u10/v10 2026-07-26),
+SNOW_DEPTH(m, renamed from sde 2026-07-30 -- **not** `sd`: `downloaded_
+attributes.py` used to wrongly map this to e5l_name "sd" and describe it
+as water-equivalent depth; verified against the real CDS request
+payload + raw GRIB metadata + already-processed output that the actual
+field is `sde` = physical depth, same quantity as COSMO/MERRA-2 all
+along), SNOWFALL(kg/m²/h, renamed from sf 2026-07-26 — matches
+MERRA-2/COSMO canonical name), asn (ECMWF "Snow albedo" — reflectivity
+of just the snow-covered surface, narrower than ALBEDO's whole-cell
+blend; no COSMO/MERRA-2 equivalent exists, kept unrenamed), ALBEDO(1,
+renamed from fal 2026-07-26 — matches MERRA-2/COSMO canonical name),
+GHI(W/m²), RH(%), WS_10M(m/s). ssrd dropped. GRIB_* attrs
 stripped (break Panoply; carry 3.4e38 sentinel). Ocean=NaN (~49%). Span
 `<1st> 00:00 .. <last> 23:00`; consecutive files DON'T overlap.
 

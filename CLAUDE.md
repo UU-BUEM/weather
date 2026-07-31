@@ -163,12 +163,34 @@ CI (`.github/workflows/ci.yml`) runs, and all must pass:
 - **markdownlint** (`.markdownlint.json`): MD013 line_length **100**
   (tables exempt), MD018 off, MD024 siblings_only (duplicate headings OK
   if not siblings). Wrap prose at 100, label fenced blocks, blank lines
-  around headings/lists/fences.
+  around headings/lists/fences. **MD060** (table-column-style, not in
+  `.markdownlint.json` — on by default) requires every `|` in a table to
+  vertically align across all rows, including the separator row; pad
+  cells with spaces to the widest entry per column (right-pad left/
+  default-aligned columns, left-pad right-aligned ones, split padding
+  for centered ones) — don't hand-format a multi-row table without
+  this, it silently drifts out of alignment as soon as any cell's
+  length differs from its neighbours.
 - **yamllint** (`.yamllint.yml`): line-length max 120; `meta.yaml` is
   ignored (Jinja2). Keep other YAML ≤120 and valid.
-- **versions (pinned across UU-BUEM repos)**: python >=3.12 (NOT 3.14 — no
-  conda-forge cfgrib/eccodes builds), numpy 1.26.*, pandas 2.2.*. Don't
-  bump these.
+- **flake8 (VS Code editor only, not in CI or this repo's own config —
+  no `.flake8`/`setup.cfg` exists)**: the editor's flake8 extension runs
+  with its own default 79-char line limit regardless of `ruff`'s
+  `line-length=88`/`ignore E501` — this repo's actual lint gate (`ruff
+  check src/`) does NOT enforce E501 at all, but the editor still shows
+  it as a Problem. Keep new/touched lines in `src/` comfortably under 79
+  chars where practical to avoid this editor-only noise, even though
+  it's not a real CI failure.
+- **versions (aligned across UU-BUEM repos)**: python >=3.12 (NOT 3.14 —
+  no conda-forge cfgrib/eccodes builds). numpy/pandas upper-bound caps
+  (`<3`) removed 2026-07-30 — they weren't actually enforced (occupancy's/
+  weather's own `pip install -e . --no-deps` workflow skips dependency
+  version checks entirely) and both repos' full pytest suites pass clean
+  on numpy 2.4-2.5/pandas 3.0.x. Only floors remain: `numpy>=1.26`,
+  `pandas>=2.0`. If you add `cupy` to an env (as `weather_env.yml` does),
+  pin `libblas=*=*openblas` — mkl (conda-forge's default BLAS build)
+  collides with cupy's bundled CUDA BLAS DLLs on Windows and crashes
+  numpy>=2's `blas_fpe_check()` self-test on import.
 - **packaging**: conda-only workflow; `pip install -e . --no-deps` (never
   `conda develop`); binaries (aria2, lbzip2, eccodes, cfgrib, cdo) in
   `weather_env.yml`, Python deps in `pyproject.toml`; `meta.yaml` version
@@ -364,16 +386,85 @@ shared flags come from `common/cli_flags.py`.
   `role`/`canonical_name` fields and `transform.build_month_dataset`)
   and MERRA-2 snowfall/snow-depth (`PRECSNOLAND`/`SNODP`, the `lnd`
   collection) both now appear in the live-regenerated 2018 data (see
-  the MERRA-2/COSMO providers table note below). COSMO ALBEDO remains
-  deliberately unbuilt: the downstream consumer that raised the question
-  (`pysam-photovoltaic-energy-simulation`) turned out to need only a
-  snow-depth-driven threshold, not real optical albedo, and COSMO
-  already has the equivalent field (`H_SNOW`) — see `compare_providers
-  .py`'s `SNOW_DEPTH` column and its module docstring. A true optical
-  albedo stays a documented option via DWD's `SOBS_RAD` (net shortwave,
-  instantaneous — NOT `ASOB_S`, its average-type sibling): `albedo =
-  ((SWDIRS_RAD + SWDIFDS_RAD) - SOBS_RAD) / (SWDIRS_RAD + SWDIFDS_RAD)`,
-  not built since no confirmed consumer needs it.
+  the MERRA-2/COSMO providers table note below). **COSMO ALBEDO built**
+  (2026-07-26): re-checked live against `pysam-photovoltaic-energy
+  -simulation`'s actual source (`scripts/main.py`) — its snow-adjusted
+  `alb` is a hardcoded `0.6 if snow_depth>1cm else 0.2` proxy feeding
+  PySAM's ground-reflectance transposition term, not a real optical
+  albedo read from any provider (confirmed neither `pysam` nor
+  `merra2-energy-pipeline` reads MERRA-2's own `ALBEDO` today). Real
+  reanalysis albedo is a genuine accuracy improvement over that binary
+  proxy for this specific parameter (a different physical mechanism
+  than the snow-on-panel coverage loss the same file computes
+  separately, correctly, from snow depth/snowfall) — planned for a
+  `pysam` refactor, so COSMO needed real albedo for cross-provider
+  parity before that refactor lands. Added `SOBS_RAD` (net shortwave,
+  instantaneous — NOT `ASOB_S`, its average-type sibling) to
+  `downloaded_attributes.py`; `transform.compute_albedo` derives
+  `ALBEDO = (GHI - SOBS_RAD) / GHI` (`GHI = SWDIRS_RAD + SWDIFDS_RAD`),
+  NaN at night (GHI <= 1 W/m^2) — matching MERRA-2's own `ALBEDO`
+  NaN-at-night behavior, not a new cross-provider inconsistency.
+  ERA5-Land's `fal` renamed to `ALBEDO` too (`asn`, the narrower
+  snow-only diagnostic, keeps its cfgrib short name) so all three
+  providers now share one canonical albedo field name, matching
+  `T`/`GHI`/`DHI`/`RH`/`WS_10M`'s existing cross-provider naming
+  convention. Extended to a **full naming unification** across all
+  three providers (2026-07-26, user-approved incl. renaming
+  already-completed archives' schemas): `PS` (was ERA5-Land's `sp`);
+  `U_10M`/`V_10M` (was `u10`/`v10` ERA5-Land, `U10M`/`V10M` MERRA-2;
+  MERRA-2's `U2M`/`V2M`/`U50M`/`V50M` also get the underscore for
+  internal consistency, no cross-provider equivalent exists; COSMO's
+  own `U_10M`/`V_10M` were originally dropped after computing `WS_10M`
+  — fixed 2026-07-30 to keep them too, matching the other two — a real
+  inconsistency found only when asked to verify all three produce
+  identical output); `SNOW_DEPTH` (was COSMO's `H_SNOW`, MERRA-2's
+  `SNODP`, and — corrected 2026-07-30 — ERA5-Land's `sde`: an earlier
+  pass wrongly assessed ERA5-Land's field as water-equivalent depth and
+  left it unrenamed; verified via the real CDS request payload, the raw
+  GRIB's own metadata, and the already-processed output that it's
+  actually `sde` = physical depth all along, the same quantity as the
+  other two, `'sd'` — water-equivalent — was never the field actually
+  downloaded); `SNOWFALL` (was MERRA-2's `PRECSNOLAND`, ERA5-Land's
+  `sf`; COSMO's
+  `SNOW_CON`+`SNOW_GSP` combined into one derived field via new
+  `transform.compute_snowfall`, matching the other two providers'
+  single-field shape). Dewpoint checked, not added: DWD's real
+  `ParameterTables_REA6.pdf` confirms COSMO has no dewpoint field at
+  all (genuinely absent upstream); MERRA-2's GES DISC catalog does have
+  `T2MDEW` in the already-fetched `slv` collection (a free add if ever
+  wanted) but wasn't added without a confirmed need.
+  `point_query.py`/`compare_providers.py`/`verify_merra2_months.py` all
+  try the new canonical name first, falling back to the old raw name,
+  so they keep working against both the already-completed archives and
+  any future rerun. Caught and fixed a real latent bug in the same
+  pass: `point_query.py`'s ERA5-Land pressure lookup had `sp` hardcoded
+  with no fallback — the `PS` rename would have silently dropped
+  pressure from DNI/DHI reconstruction on any future ERA5-Land archive.
+  **`T_DEW` (dew point) added too**, verified 100% first against DWD's
+  real `hourly/2D/` directory listing (not just the parameter table):
+  COSMO has no dew-point field at all and no better free derivation
+  than `T_2M`+`RELHUM_2M` (the alternative, `QV_2M`, is listed there
+  but would need a new download for no accuracy gain). New
+  `dewpoint_from_rh()` in `derived_attributes.py` (algebraic inverse of
+  the existing `magnus_rh()`, cross-checked against a standard
+  meteorological reference, ±0.35°C for T in [-40,50]°C) derives it for
+  COSMO for free. ERA5-Land's native `d2m` renamed to `T_DEW`. MERRA-2
+  had no dewpoint at all; added `T2MDEW` as a new raw attribute — free,
+  same `slv` collection already fetched — renamed to `T_DEW`.
+  **COSMO verified live** (2026-07-26, real DWD data): 0 `T_DEW > T`
+  violations across ~520M values (by construction — derived from T/RH).
+  **MERRA-2 verified live** (2026-07-30, real GES DISC data): native
+  `T2MDEW` genuinely violates `T_DEW <= T` in ~3.2% of values — confirmed
+  present in NASA's raw data itself, not a pipeline bug. ERA5-Land's
+  native `d2m` independently checked the same day: 0 violations across
+  ~62M points. → `.claude/merra2/merra2_context.md` for the full
+  writeup. Also fixed 2026-07-30: COSMO now keeps `U_10M`/`V_10M`
+  (previously dropped after computing `WS_10M`, unlike ERA5-Land/
+  MERRA-2 which always kept them), and ERA5-Land's `snow_depth` was
+  mislabeled (`e5l_name` wrongly `"sd"`/water-equivalent; the real
+  field is `"sde"`/physical depth, now correctly renamed to
+  `SNOW_DEPTH` too — full 3-way unification). →
+  `.claude/open.md`'s `## cross-provider` entry for the full picture.
 
 ## Country bbox + cropping (`geo/`)
 

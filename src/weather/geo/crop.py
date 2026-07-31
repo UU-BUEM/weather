@@ -106,7 +106,7 @@ def crop_netcdf(
 
     args = [
         "cdo",
-        "-O",  # tmp_path already exists (mkstemp reserved it) -- force overwrite
+        "-O",  # tmp_path exists (mkstemp reserved it) -- force overwrite
         "-L",
         f"sellonlatbox,{west},{east},{south},{north}",
         str(input_path),
@@ -119,9 +119,13 @@ def crop_netcdf(
     try:
         result = subprocess.run(args, capture_output=True, text=True)
         if result.returncode != 0:
-            log.error("cdo failed (exit %d): %s", result.returncode, result.stderr.strip())
+            log.error(
+                "cdo failed (exit %d): %s",
+                result.returncode, result.stderr.strip(),
+            )
             raise subprocess.CalledProcessError(
-                result.returncode, args, output=result.stdout, stderr=result.stderr
+                result.returncode, args,
+                output=result.stdout, stderr=result.stderr,
             )
         Path(tmp_path).replace(output_path)
     except BaseException:
@@ -138,7 +142,7 @@ def crop_to_country(
     *,
     logger: logging.Logger | None = None,
 ) -> Path:
-    """Crop *input_path* to *country*'s bounding box (see :mod:`.countries`)."""
+    """Crop *input_path* to *country*'s bbox (see :mod:`.countries`)."""
     return crop_netcdf(
         input_path, output_path, get_bbox(country), logger=logger
     )

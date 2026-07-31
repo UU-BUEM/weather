@@ -745,9 +745,67 @@ def build_monthly_dataset(
 
     # ── Cross-provider naming uniformity ────────────────────────────
     # 1) 2 m air temperature: COSMO emits canonical 'T' (degC); match it.
-    #    Dew point stays 'd2m' (COSMO has no canonical dew-point name).
     if "t2m" in ds:
         ds = ds.rename({"t2m": "T"})
+
+    # 1a) Dew point: ERA5-Land's native 'd2m' renamed to canonical
+    #     'T_DEW' (2026-07-26), matching COSMO's derived T_DEW
+    #     (inverse Magnus-Tetens from T/RELHUM_2M, see
+    #     cosmo_rea6/transform.py's compute_dewpoint) and MERRA-2's
+    #     renamed T2MDEW. ERA5-Land's is a directly measured/assimilated
+    #     dew point, not a derived one -- no formula needed here.
+    if "d2m" in ds:
+        ds = ds.rename({"d2m": "T_DEW"})
+
+    # 1b) Forecast albedo: MERRA-2 emits 'ALBEDO' natively and COSMO
+    #     derives an equivalent (GHI - SOBS_RAD) / GHI quantity under
+    #     the same canonical name (see cosmo_rea6/transform.py's
+    #     compute_albedo) -- rename 'fal' to match. 'asn' (snow-specific
+    #     albedo, a narrower diagnostic with no cross-provider
+    #     equivalent) intentionally keeps its cfgrib short name.
+    if "fal" in ds:
+        ds = ds.rename({"fal": "ALBEDO"})
+        ds["ALBEDO"].attrs.setdefault(
+            "long_name", "Forecast albedo (total surface reflectivity)"
+        )
+        ds["ALBEDO"].attrs.setdefault("units", "1")
+
+    # 1c) Surface pressure: COSMO/MERRA-2 both emit 'PS'; rename 'sp' to
+    #     match.
+    if "sp" in ds:
+        ds = ds.rename({"sp": "PS"})
+
+    # 1d) 10 m wind components: canonical 'U_10M'/'V_10M' matches COSMO's
+    #     native names and the already-shared 'WS_10M' scalar's naming
+    #     style; MERRA-2's 'U10M'/'V10M' get the same treatment (see
+    #     merra2/transform.py). ERA5-Land has no 2 m/50 m wind to rename
+    #     (MERRA-2-only, no cross-provider equivalent there).
+    if "u10" in ds:
+        ds = ds.rename({"u10": "U_10M"})
+    if "v10" in ds:
+        ds = ds.rename({"v10": "V_10M"})
+
+    # 1e) Snowfall: canonical 'SNOWFALL' matches MERRA-2's renamed
+    #     'PRECSNOLAND' and COSMO's combined SNOW_CON+SNOW_GSP (see
+    #     cosmo_rea6/transform.py's compute_snowfall) -- all three are
+    #     the same physical quantity (accumulated mass of solid
+    #     precipitation, kg/m^2/h).
+    if "sf" in ds:
+        ds = ds.rename({"sf": "SNOWFALL"})
+
+    # 1f) Snow depth: canonical 'SNOW_DEPTH' matches COSMO's renamed
+    #     H_SNOW/MERRA-2's renamed SNODP -- confirmed 2026-07-30 (real
+    #     CDS request payload + raw GRIB metadata + already-processed
+    #     2018-03 output all agree) that this dataset's actual
+    #     downloaded field is 'snow_depth' (GRIB shortName 'sde',
+    #     physical thickness in meters), NOT 'snow_depth_water_
+    #     equivalent' (shortName 'sd') as a prior version of
+    #     downloaded_attributes.py's entry incorrectly assumed. All
+    #     three providers' snow depth are the same physical quantity
+    #     after all -- see downloaded_attributes.py's 'snow_depth'
+    #     entry for the full verification trail.
+    if "sde" in ds:
+        ds = ds.rename({"sde": "SNOW_DEPTH"})
 
     # 2) Spatial dims: COSMO uses (y, x); ERA5-Land arrives on
     #    (latitude, longitude).  We want y/x DIMENSIONS (so downstream
@@ -774,9 +832,12 @@ def build_monthly_dataset(
             x=("x", np.arange(ds.sizes["x"])),
         )
 
-    # We keep cfgrib short names for the remaining raw fields (d2m, u10,
-    # v10, sp, sd, sf, asn, fal) so the file is self-describing and
-    # matches the eccodes tables.
+    # We keep the cfgrib short name for the one remaining raw field
+    # (asn -- snow-specific albedo, no cross-provider equivalent) so
+    # the file is self-describing and matches the eccodes tables.
+    # 'fal'/'sp'/'u10'/'v10'/'sf'/'d2m'/'sde' are the exceptions,
+    # renamed above to 'ALBEDO'/'PS'/'U_10M'/'V_10M'/'SNOWFALL'/
+    # 'T_DEW'/'SNOW_DEPTH' for cross-provider parity.
     ds.attrs.setdefault("provider", "ERA5_LAND")
     ds.attrs.setdefault("Conventions", "CF-1.8")
 

@@ -22,8 +22,8 @@ requirements:
     - dask >=2024.1
     - eccodes >=2.34
     - netcdf4 >=1.6
-    - numpy >=1.26,<3
-    - pandas >=2.0,<3
+    - numpy >=1.26
+    - pandas >=2.0
     - pyproj >=3.6
     - python-dotenv >=1.0
     - requests >=2.31

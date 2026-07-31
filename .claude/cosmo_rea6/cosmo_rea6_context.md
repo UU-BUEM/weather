@@ -7,17 +7,23 @@ Confidence: HIGH (from actual source). Reference provider the others follow.
   `.../REA/COSMO_REA6/hourly/2D`. Files: one per attr per month,
   `{ATTR}.2D.{YYYYMM}.grb.bz2`, URL `{base}/{ATTR}/{fname}` (naming.py).
 - ~6 km, CORDEX-EU11, **rotated-pole**; dims `y`/`x`. Winds U_10M/V_10M in
-  rotated-pole grid-north (kept as-is). Coverage 1995–2019 (validate
-  enforces).
+  rotated-pole grid-north (kept as-is, both as raw components in the
+  output AND as derived `WS_10M` — fixed 2026-07-30 to also keep the
+  raw components, matching ERA5-Land/MERRA-2, which always did; COSMO
+  used to be the only one of the three that discarded them). Coverage
+  1995–2019 (validate enforces).
 
-## Raw attributes (10) — downloaded_attributes.py (DICT)
-H_SNOW(m), PS(Pa), RELHUM_2M(%), SNOW_CON(kg/m²), SNOW_GSP(kg/m²),
-SWDIFDS_RAD(W/m², diffuse, instant), SWDIRS_RAD(W/m², direct, instant),
-T_2M(K→°C), U_10M, V_10M(m/s). Keys: dwd_name, description, unit_raw,
-unit_target, conversion, **role** (`"formula"` vs `"passthrough"` —
-single source of truth for which attrs need hand-written derivation
-code vs generic assembly), **canonical_name** (output var name when it
-differs from the key, e.g. RELHUM_2M → RH). `pipeline.py::run_pipeline()`
+## Raw attributes (11) — downloaded_attributes.py (DICT)
+H_SNOW(m, canonical_name SNOW_DEPTH), PS(Pa), RELHUM_2M(%, canonical_name
+RH), SNOW_CON(kg/m², formula — feeds combined SNOWFALL), SNOW_GSP(kg/m²,
+formula — feeds combined SNOWFALL), SOBS_RAD(W/m², formula — feeds
+derived ALBEDO, added 2026-07-26), SWDIFDS_RAD(W/m², diffuse, instant),
+SWDIRS_RAD(W/m², direct, instant), T_2M(K→°C), U_10M, V_10M(m/s). Keys:
+dwd_name, description, unit_raw, unit_target, conversion, **role**
+(`"formula"` vs `"passthrough"` — single source of truth for which
+attrs need hand-written derivation code vs generic assembly),
+**canonical_name** (output var name when it differs from the key, e.g.
+RELHUM_2M → RH, H_SNOW → SNOW_DEPTH). `pipeline.py::run_pipeline()`
 reads attributes straight from `config.get_config()["attributes"]`
 (itself `list(ATTRIBUTES.keys())`) — the old hand-duplicated `_ALL_ATTRS`
 list in `test_cosmo_one_month.py` that used to silently drop RELHUM_2M
@@ -47,9 +53,13 @@ that `test_cosmo_one_month.py`/`test_cosmo_one_year.py` call into — see
   `sd26` predates this fix and has no lat/lon at all — still needs a
   transform+export re-run there** (not download/decompress/percentile)
   before point-query or cropping work against it.
-- **No albedo attribute exists for COSMO** — not in DWD's published
-  COSMO-REA6 2D variable catalog at all (checked). ERA5-Land (`fal`) and
-  MERRA-2 (`ALBEDO`) both have it.
+- **COSMO now has a derived ALBEDO** (2026-07-26, reversing an earlier
+  "no albedo field exists for COSMO" note): no DWD-native albedo field,
+  but `SOBS_RAD` (net shortwave at surface, in DWD's parameter table —
+  NOT `ASOB_S`, its average-type sibling) enables `ALBEDO = (GHI -
+  SOBS_RAD) / GHI` (`transform.compute_albedo`), NaN at night. ERA5-Land's
+  `fal` renamed to `ALBEDO` too, for a shared canonical name across all
+  three providers. See `.claude/open.md`'s `## cosmo_rea6` entry.
 - **Radiation split at source:** SWDIFDS(diffuse)+SWDIRS(direct), both
   instant. `derived_attributes` builds GHI/DHI/DNI: DHI=SWDIFDS,
   DNI=SWDIRS/cos(zenith) (horizon-divergent → COSMO needs Spencer-SZA

@@ -7,7 +7,8 @@ Orchestrates the full workflow, one or more months at a time:
     2. **Decompress** — parallel bz2 decompression to raw GRIB (bulk).
     3. **Transform + Export** — per month (bounded peak memory): read
        GRIB with xarray/cfgrib, convert units, compute derived fields
-       (GHI, DHI, T, WS_10M, DNI), write one compressed NetCDF-4 file.
+       (GHI, DHI, T, WS_10M, ALBEDO, SNOWFALL, T_DEW, DNI), write one
+       compressed NetCDF-4 file.
 
 Each step is idempotent: re-running skips files that are already
 present and have the expected size; ``resume=True`` also skips months
@@ -30,7 +31,8 @@ Pipeline flow
       │
       └── Phase 3 — Transform + Export, sequential per month (dask uses
             all allocated cores within each month):
-              transform.build_month_dataset -> GHI, DHI, T, WS_10M, DNI
+              transform.build_month_dataset
+                  -> GHI, DHI, T, WS_10M, ALBEDO, SNOWFALL, T_DEW, DNI
               export.to_netcdf -> output/COSMO_REA6_<YYYY>_<MM>_all_attrs.nc
               DNI outlier report (unless skip_dni)
               cleanup: delete this month's decompressed GRIB/idx/lock

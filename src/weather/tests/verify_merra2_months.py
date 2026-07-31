@@ -45,6 +45,13 @@ _PATTERN = re.compile(r"MERRA2_(\d{4})_(\d{2})_all_attrs\.nc$")
 #: European latitudes. Values outside these bounds are flagged, not
 #: necessarily wrong (e.g. a genuine storm PS low) — a sanity net, not
 #: a hard spec.
+#: Both the pre-2026-07-26 raw names (T2M, U10M/V10M, U2M/V2M) and the
+#: cross-provider canonical names they were renamed to (T; U_10M/V_10M;
+#: U_2M/V_2M) are listed below. The already-completed 46-year archive on
+#: disk still has the OLD names (renames only take effect on the NEXT
+#: MERRA-2 rerun -- same backward-compatible pattern already used for
+#: T2M -> T, see .claude/open.md); having both present means this table
+#: keeps working unmodified either way, whichever this tool is pointed at.
 _PLAUSIBLE_RANGE: dict[str, tuple[float, float]] = {
     "ALBEDO": (0.0, 1.0),
     "PS": (85000.0, 108000.0),  # Pa; ERA5-Land-comparable surface range
@@ -54,10 +61,25 @@ _PLAUSIBLE_RANGE: dict[str, tuple[float, float]] = {
     # (Arctic Scandinavia/Kola), so -51.09/51.72 over 46 years is real
     # climate, not corrupted data -- same rationale as the PS/Alps case.
     "T2M": (-55.0, 55.0),
+    "T": (-55.0, 55.0),
     "U10M": (-45.0, 45.0),  # m/s
+    "U_10M": (-45.0, 45.0),
     "U2M": (-45.0, 45.0),
+    "U_2M": (-45.0, 45.0),
+    "U50M": (-50.0, 50.0),  # hub-height, slightly stronger than 10m
+    "U_50M": (-50.0, 50.0),
     "V10M": (-45.0, 45.0),
+    "V_10M": (-45.0, 45.0),
     "V2M": (-45.0, 45.0),
+    "V_2M": (-45.0, 45.0),
+    "V50M": (-50.0, 50.0),
+    "V_50M": (-50.0, 50.0),
+    # m; real 46-year max observed was 4.78 m (see merra2_plan.md).
+    "SNODP": (0.0, 10.0),
+    "SNOW_DEPTH": (0.0, 10.0),
+    # kg/m^2/h; real 46-year max observed was 76.9 (see merra2_plan.md).
+    "PRECSNOLAND": (0.0, 150.0),
+    "SNOWFALL": (0.0, 150.0),
     "GHI": (0.0, 1400.0),  # W/m^2; solar constant ~1361
     "WS_10M": (0.0, 60.0),  # m/s
     "RH": (0.0, 100.0),  # %

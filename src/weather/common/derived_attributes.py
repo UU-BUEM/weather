@@ -268,6 +268,29 @@ def magnus_rh(t_celsius: Any, td_celsius: Any) -> Any:
     return rh.clip(0.0, 100.0)
 
 
+def dewpoint_from_rh(t_celsius: Any, rh_percent: Any) -> Any:
+    """Dew point (degC) via the inverse August-Roche-Magnus approximation
+    from temperature (degC) and relative humidity (%).
+
+    Algebraic inverse of :func:`magnus_rh` (same a/b constants -- solves
+    the same equation for Td instead of RH):
+    ``gamma = ln(RH/100) + a*T/(b+T)``; ``Td = b*gamma / (a - gamma)``.
+    Accuracy +/-0.35 degC for T in [-40, 50] degC (Alduchov & Eskridge
+    1996) -- verified against a standard meteorological reference, not
+    just derived algebraically.
+
+    Used by COSMO-REA6, the only provider with neither a native
+    dew-point field nor specific humidity already downloaded: it has
+    ``T_2M``/``RELHUM_2M`` directly, so this is a free derivation (no
+    new attribute needed). Confirmed via DWD's real COSMO-REA6
+    ``hourly/2D/`` directory listing that no dew-point field exists
+    upstream at all (not just "not downloaded").
+    """
+    a, b = 17.625, 243.04
+    gamma = np.log(rh_percent / 100.0) + (a * t_celsius) / (b + t_celsius)
+    return (b * gamma) / (a - gamma)
+
+
 def bolton_rh(specific_humidity: Any, pressure_pa: Any, t_celsius: Any) -> Any:
     """Relative humidity (%) from specific humidity, pressure, and
     temperature (degC), via the Bolton (1980) saturation-vapor-pressure

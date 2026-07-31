@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+## [1.6.0] - 2026-07-30
+
+### Added
+
+- **Cross-provider attribute naming unification.** COSMO-REA6, ERA5-Land, and
+  MERRA-2 now share one canonical output name per physical quantity wherever
+  the quantity is genuinely the same across providers (formulas still differ
+  by design where the physics differs — see `docs/provider_differences.md`'s
+  new "Attribute naming reference" table for the full raw-source -> canonical
+  mapping):
+  - `T_DEW` (dew point): COSMO derives it (`dewpoint_from_rh()`, algebraic
+    inverse of the existing Magnus RH formula — DWD's real `hourly/2D/`
+    directory listing confirmed no native dew-point field exists and no
+    better free derivation is available); ERA5-Land's native `d2m` renamed;
+    MERRA-2 gained a new raw attribute `T2MDEW` (free — same `slv` collection
+    already fetched) renamed to match.
+  - `ALBEDO`: COSMO gained a new raw attribute `SOBS_RAD` (net shortwave,
+    instantaneous) and derives `ALBEDO = (GHI - SOBS_RAD) / GHI`, NaN at
+    night; ERA5-Land's native `fal` (forecast/total albedo) renamed — `asn`
+    (snow-only albedo, narrower, no cross-provider equivalent) intentionally
+    left unrenamed; MERRA-2's native `ALBEDO` unchanged.
+  - `SNOWFALL`: COSMO's `SNOW_CON`+`SNOW_GSP` combined into one derived
+    field; ERA5-Land's `sf` and MERRA-2's `PRECSNOLAND` renamed.
+  - `SNOW_DEPTH`, `PS`, `U_10M`/`V_10M`: renamed from each provider's raw
+    name (`H_SNOW`/`sde`(see Fixed)/`SNODP`; `sp`; `u10`/`v10`,
+    `U10M`/`V10M`) to the shared canonical names.
+- COSMO's `build_month_dataset` now also keeps raw `U_10M`/`V_10M` alongside
+  the derived `WS_10M` scalar, matching ERA5-Land/MERRA-2 (previously COSMO
+  was the only one of the three that discarded the raw components).
+- `docs/provider_differences.md`: new "Attribute naming reference" section
+  (raw source -> canonical output per provider, plus a table of
+  provider-unique fields with no cross-provider equivalent: `asn`, `QV2M`,
+  `U_2M`/`V_2M`, `U_50M`/`V_50M`).
+
+### Fixed
+
+- **MERRA-2 GES DISC stream-number 404 on reprocessed months (2020/2021).**
+  `downloader.py` hardcoded a single stream number (400) for the entire
+  2011-present range, but NASA reprocessed September 2020 and June-September
+  2021 under runid 401 instead — a scattered, non-contiguous set of months,
+  not a clean date range. `_fetch` now falls back from the primary stream to
+  `primary + 1` on a 404 (via a new `_StreamNotFound`, not `OSError`, so it
+  doesn't burn 5 useless backoff retries on what's a permanent failure
+  first). Verified live: the full 1980-2025 archive (46 years, 552 monthly
+  files) now completes and passes `verify_merra2_months.py`'s continuity
+  check across every year boundary, including 2019->2020->2021->2022.
+- **ERA5-Land's `snow_depth` was mapped to the wrong CDS variable.**
+  `downloaded_attributes.py`'s entry used `e5l_name: "sd"` and described the
+  field as water-equivalent depth — genuinely different from COSMO's
+  `H_SNOW`/MERRA-2's `SNODP` (physical depth), so it was deliberately left
+  unrenamed. That was wrong: the actual CDS request variable is `snow_depth`
+  (confirmed against the real request payload), which decodes via cfgrib to
+  GRIB shortName `sde` — physical depth in meters, the same quantity as the
+  other two all along. `sd` is CDS's *other* variable
+  (`snow_depth_water_equivalent`), never requested. Verified three ways: the
+  real CDS request payload, the raw GRIB's own decoded metadata
+  (`GRIB_shortName 'sde'`), and the already-processed 2018-03 output (the
+  variable was literally named `sde`). The mislabeling never affected any
+  actual downloaded/exported value — the water-equivalent conversion the old
+  entry described was never implemented either, so this is a naming/
+  documentation fix, not a data correction. Now renamed to canonical
+  `SNOW_DEPTH` alongside the other two. `compare_providers.py`'s lookup and
+  `docs/provider_differences.md`'s snow-depth section corrected to match.
+- `weather_env`'s `mkl` BLAS build collided with `cupy`'s bundled CUDA BLAS DLLs
+  (cublas/nvblas) on Windows, crashing numpy>=2's `blas_fpe_check()` self-test on
+  plain `import numpy` (Windows fatal exception `0xc06d007f`) — broke the env
+  entirely, not just a version-compat issue. Fixed by pinning
+  `libblas=*=*openblas` in `infrastructure/env/weather_env.yml`.
+
+### Changed
+
+- MERRA-2's `percentile_index.py` run for real against the full 46-year
+  archive (previously only smoke-tested against a single year, where
+  `source_year` output is trivially degenerate): all 36 output files
+  written, genuine per-cell `source_year` diversity confirmed (P50 draws
+  from 45-46 of 46 years per month, P10/P90 from 32-43).
+  `verify_merra2_months.py`'s `T2M` plausible-range sanity check widened
+  from `(-40, 45)` to `(-55, 55)` — the Europe box spans 34N (Saharan
+  margin) to 72N (Arctic Scandinavia), so both ends of the wider range are
+  real climate, not corrupted data, once evaluated over 46 years instead of
+  one.
+- Removed the `numpy<3`/`pandas<3` upper-bound caps from `pyproject.toml`/
+  `meta.yaml` (floors only now: `numpy>=1.26`, `pandas>=2.0`) — not actually
+  enforced in practice (`weather_env.yml` already left them unbounded) and the
+  full `pytest` suite (55 passed / 2 skipped, 1 unrelated eccodes-library gap)
+  passes clean on numpy 2.4.4/pandas 3.0.3 + openblas.
+- Removed unused `cupy` (and its CUDA dependencies) from
+  `infrastructure/env/weather_env.yml` — no GPU work was actually being done
+  with it. `libblas=*=*openblas` kept regardless (see Fixed above): already
+  verified working, no reason to revert to an untested mkl-without-cupy config.
+
 ## [1.5.3] - 2026-07-29
 
 ### Added

@@ -26,6 +26,46 @@ the formulas (see `CLAUDE.md`: "Do NOT unify").
 
 ---
 
+## Attribute naming reference: raw source -> canonical output
+
+Every provider's `transform.py` renames or derives its raw downloaded
+attributes into one shared set of canonical output names (e.g. ERA5-Land's
+`fal` -> `ALBEDO`). Where the physical quantity genuinely differs across
+providers, the raw formula differs too (see `CLAUDE.md`: "Do NOT unify")
+but the *name* is still shared. Current as of 2026-07-30 (full
+cross-provider naming-unification pass — see `.claude/open.md`'s
+`## cross-provider` entry for the complete history of what was renamed,
+when, and why, including two real mislabeling bugs found and fixed along
+the way: COSMO used to drop its raw wind components, and ERA5-Land's
+`snow_depth` entry was mapped to the wrong CDS variable).
+
+| Canonical       | COSMO-REA6 source                                                            | ERA5-Land source                                           | MERRA-2 source                                             |
+| --------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
+| `T`             | `T_2M` (K -> degC)                                                           | `t2m` (rename)                                             | `T2M` (rename)                                             |
+| `T_DEW`         | `T_2M`+`RELHUM_2M` (derived, inverse Magnus-Tetens — no native field exists) | `d2m` (rename, native)                                     | `T2MDEW` (rename, native)                                  |
+| `GHI`           | `SWDIFDS_RAD`+`SWDIRS_RAD` (sum, clipped)                                    | `ssrd` (de-accumulated, ÷3600)                             | `SWGDN` (night-masked, already instantaneous)              |
+| `DHI`           | `SWDIFDS_RAD` (native, exact)                                                | — (bulk not computed; point-of-use via `dni_pointwise.py`) | — (bulk not computed; point-of-use via `dni_pointwise.py`) |
+| `DNI`           | `SWDIRS_RAD`/cos(θz) (native, experimental)                                  | — (point-of-use only)                                      | — (point-of-use only)                                      |
+| `RH`            | `RELHUM_2M` (rename, direct measurement)                                     | `t2m`+`d2m` (Magnus formula)                               | `QV2M`+`PS`+`T2M` (Bolton 1980 formula)                    |
+| `WS_10M`        | `U_10M`+`V_10M` (sqrt(u²+v²))                                                | `u10`+`v10` (sqrt(u²+v²))                                  | `U10M`+`V10M` (sqrt(u²+v²))                                |
+| `U_10M`/`V_10M` | `U_10M`/`V_10M` (kept as-is, native)                                         | `u10`/`v10` (rename)                                       | `U10M`/`V10M` (rename)                                     |
+| `ALBEDO`        | `SWDIFDS_RAD`+`SWDIRS_RAD`+`SOBS_RAD` (derived: `(GHI-SOBS_RAD)/GHI`)        | `fal` (rename, native "forecast albedo")                   | `ALBEDO` (native, unchanged)                               |
+| `SNOWFALL`      | `SNOW_CON`+`SNOW_GSP` (sum)                                                  | `sf` (rename)                                              | `PRECSNOLAND` (rename, kg/m²/s -> kg/m²/h)                 |
+| `SNOW_DEPTH`    | `H_SNOW` (rename)                                                            | `sde` (rename)                                             | `SNODP` (rename)                                           |
+| `PS`            | `PS` (unchanged)                                                             | `sp` (rename)                                              | `PS` (unchanged)                                           |
+
+**Provider-unique fields** (no cross-provider equivalent, kept under
+their own raw name, not part of the canonical set above):
+
+| Field           | Provider       | What it is                                                                                                                                                    |
+| --------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `asn`           | ERA5-Land only | ECMWF "snow albedo" — reflectivity of just the snow-covered fraction, narrower than `ALBEDO`'s whole-grid-cell blend                                          |
+| `QV2M`          | MERRA-2 only   | 2 m specific humidity (kg/kg) — the raw input `RH`'s Bolton formula is derived from; kept in the output alongside the derived `RH`                            |
+| `U_2M`/`V_2M`   | MERRA-2 only   | 2 m wind components (renamed from `U2M`/`V2M` for internal consistency, no derived scalar computed from these)                                                |
+| `U_50M`/`V_50M` | MERRA-2 only   | 50 m (hub-height) wind components (renamed from `U50M`/`V50M`) — added for a confirmed downstream wind-power consumer, see `.claude/merra2/merra2_context.md` |
+
+---
+
 ## 1. Relative humidity: MERRA-2 reads ~6 points higher than ERA5-Land
 
 ### What's different
@@ -33,10 +73,10 @@ the formulas (see `CLAUDE.md`: "Do NOT unify").
 Each provider computes RH from different source fields via a different
 formula — this is by design, documented in `CLAUDE.md`:
 
-| Provider   | RH source                              | Formula family                    |
-| ---------- | --------------------------------------- | ---------------------------------- |
-| COSMO-REA6 | `RELHUM_2M` (direct model output)       | none — RH is a native model field |
-| ERA5-Land  | 2 m dew-point (`d2m`) + 2 m temperature | Magnus formula                    |
+| Provider   | RH source                                    | Formula family                          |
+| ---------- | -------------------------------------------- | --------------------------------------- |
+| COSMO-REA6 | `RELHUM_2M` (direct model output)            | none — RH is a native model field       |
+| ERA5-Land  | 2 m dew-point (`d2m`) + 2 m temperature      | Magnus formula                          |
 | MERRA-2    | 2 m specific humidity (`QV2M`) + `PS`, `T2M` | psychrometric (specific-humidity-based) |
 
 (COSMO has no RH in the currently-generated 2018 files for an unrelated
@@ -102,11 +142,11 @@ consistent with what's reported in reanalysis intercomparison literature
 
 ### What's different
 
-| Provider   | Field  | What it represents                                             |
-| ---------- | ------ | ---------------------------------------------------------------- |
-| COSMO-REA6 | none in this dataset, but obtainable | `albedo = ((SWDIRS_RAD+SWDIFDS_RAD) - SOBS_RAD) / (SWDIRS_RAD+SWDIFDS_RAD)` — `SOBS_RAD` (net shortwave, instantaneous) is in DWD's full parameter table but not currently downloaded; see `compare_providers.py`'s module docstring |
-| ERA5-Land  | `fal`  | "forecast albedo" — total background reflectivity, bare land + variable snow cover combined |
-| MERRA-2    | `ALBEDO` | native surface albedo (M2T1NXRAD collection)                    |
+| Provider   | Field                                  | What it represents                                                                                                                                                                                                                                                                       |
+| ---------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| COSMO-REA6 | `ALBEDO`                               | `(GHI - SOBS_RAD) / GHI`, `GHI = SWDIRS_RAD + SWDIFDS_RAD` — built as of the `SOBS_RAD` addition (see `cosmo_rea6/transform.py::compute_albedo`); NaN at night. Not yet incorporated into the `compare_providers.py` table below (needs a rerun against a COSMO archive with `SOBS_RAD`) |
+| ERA5-Land  | `ALBEDO` (renamed from cfgrib's `fal`) | "forecast albedo" — total background reflectivity, bare land + variable snow cover combined                                                                                                                                                                                              |
+| MERRA-2    | `ALBEDO`                               | native surface albedo (M2T1NXRAD collection)                                                                                                                                                                                                                                             |
 
 ### What the data shows
 
@@ -154,11 +194,16 @@ mix — precisely the pattern seen above.
 
 ### What's different
 
-| Provider   | Field                    | Meaning                                   |
-| ---------- | ------------------------ | ------------------------------------------ |
-| COSMO-REA6 | `SNOW_GSP` + `SNOW_CON`  | stratiform + convective snow, hourly-accumulated (kg/m²) |
-| ERA5-Land  | `sf`                     | snowfall rate, hourly-accumulated (kg/m²/h) |
-| MERRA-2    | `PRECSNOLAND`            | snowfall rate over land, converted kg/m^2/s -> kg/m^2/h (the `M2T1NXLND` collection, added and live-verified this session — see `.claude/open.md`) |
+| Provider   | Field                                                                              | Meaning                                                                                                                                            |
+| ---------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| COSMO-REA6 | `SNOW_GSP` + `SNOW_CON` (combined into one `SNOWFALL` field 2026-07-26, see below) | stratiform + convective snow, hourly-accumulated (kg/m²)                                                                                           |
+| ERA5-Land  | `sf` (renamed `SNOWFALL` 2026-07-26)                                               | snowfall rate, hourly-accumulated (kg/m²/h)                                                                                                        |
+| MERRA-2    | `PRECSNOLAND` (renamed `SNOWFALL` 2026-07-26)                                      | snowfall rate over land, converted kg/m^2/s -> kg/m^2/h (the `M2T1NXLND` collection, added and live-verified this session — see `.claude/open.md`) |
+
+All three renamed to the shared canonical `SNOWFALL` name as of
+2026-07-26 (see `.claude/open.md`'s `## cross-provider` naming-unification
+entry); the already-completed 2018 archive this section's numbers come
+from still has the OLD names above, unaffected by the rename.
 
 ### What the data shows
 
@@ -218,37 +263,45 @@ specific comparison.
 
 ---
 
-## 4. Snow depth: COSMO and MERRA-2 are physical depth; ERA5-Land is water equivalent
+## 4. Snow depth: all three providers are physical depth (corrected 2026-07-30)
 
 ### What's different
 
-| Provider   | Field    | Meaning                                              |
-| ---------- | -------- | ------------------------------------------------------ |
-| COSMO-REA6 | `H_SNOW` | physical snow depth, meters                             |
-| MERRA-2    | `SNODP`  | physical snow depth, meters                             |
-| ERA5-Land  | `sd`     | snow depth **in meters of water equivalent**, not physical depth |
+| Provider   | Field                                      | Meaning                     |
+| ---------- | ------------------------------------------ | --------------------------- |
+| COSMO-REA6 | `H_SNOW` (renamed `SNOW_DEPTH` 2026-07-26) | physical snow depth, meters |
+| MERRA-2    | `SNODP` (renamed `SNOW_DEPTH` 2026-07-26)  | physical snow depth, meters |
+| ERA5-Land  | `sde` (renamed `SNOW_DEPTH` 2026-07-30)    | physical snow depth, meters |
 
-COSMO's `H_SNOW` and MERRA-2's `SNODP` are the same physical quantity and
-directly comparable. ERA5-Land's `sd` is not: `downloaded_attributes.py`
-documents a water-equivalent -> physical-depth conversion (divide by
-snow density/1000, or assume a fallback density), but that conversion is
-not implemented anywhere in `era5_land/transform.py` — `sd` passes
-through raw. Do not compare ERA5-Land's `SNOW_DEPTH` numerically against
-the other two without applying that conversion yourself first (see
-`tests/compare_providers.py`'s module docstring, which carries the same
-caveat next to its `SNOW_DEPTH` comparison column).
+**Correction (2026-07-30):** an earlier version of this section, and of
+`era5_land/downloaded_attributes.py`'s `snow_depth` entry, claimed
+ERA5-Land's field was **meters of water equivalent**, genuinely
+different from the other two, and left it deliberately unrenamed. That
+claim was wrong. Verified via three independent sources: the real CDS
+request payload (variable `snow_depth`, not `snow_depth_water_
+equivalent`), the raw GRIB's own decoded metadata (`GRIB_shortName
+'sde'`, `long_name 'Snow depth'` — not `'sd'`, which is the OTHER,
+water-equivalent variable), and the already-processed 2018-03 output
+(the variable was literally named `sde`, not `sd`). All three providers'
+snow depth is the same physical quantity after all, now renamed to the
+shared canonical `SNOW_DEPTH`. Importantly, this mislabeling never
+affected any actual downloaded/exported VALUE — the water-equivalent ->
+physical-depth conversion the old entry described was never actually
+implemented in `era5_land/transform.py` either, so every number below
+has always been correct; only the description and the naming decision
+were wrong.
 
 ### What the data shows
 
-This attribute was only added to the comparison tool this session, so
-only a single snow-free-season snapshot exists so far — whole-Europe
-domain stats, June 2018:
+Whole-Europe domain stats, June 2018:
 
-| Provider   | Field    | Mean (m) | Max (m) | NaN fraction                         |
-| ---------- | -------- | -------: | ------: | -------------------------------------- |
-| COSMO-REA6 | `H_SNOW` |     0.00 |   40.00 | 0.00                                    |
-| MERRA-2    | `SNODP`  |     0.00 |    0.53 | 0.00                                    |
-| ERA5-Land  | `sd`     |     0.02 |   33.33 | 0.49 (ocean cells — ERA5-Land is land-only, this NaN fraction matches every other ERA5-Land attribute in the same domain-stats table, not a data problem) |
+| Provider   | Field    | Mean (m) | Max (m) | NaN fraction                                                                                                                                              |
+| ---------- | -------- | -------: | ------: | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| COSMO-REA6 | `H_SNOW` |     0.00 |   40.00 | 0.00                                                                                                                                                      |
+| MERRA-2    | `SNODP`  |     0.00 |    0.53 | 0.00                                                                                                                                                      |
+| ERA5-Land  | `sde`    |     0.02 |   33.33 | 0.49 (ocean cells — ERA5-Land is land-only, this NaN fraction matches every other ERA5-Land attribute in the same domain-stats table, not a data problem) |
+
+All three are now directly comparable — no conversion needed.
 
 June is close to snow-free at most of the Europe domain except high
 terrain and the far north (COSMO's max of 40 m physical depth is almost
@@ -259,10 +312,12 @@ comparison needs to go further.
 
 ### Why
 
-Not run yet as a quantified difference (unlike sections 1-3 above) —
-the units mismatch documented above is a data-representation gap
-(ERA5-Land not converting `sd` to physical depth), not a modeling
-difference between the three products' actual snowpack.
+Not run yet as a quantified difference (unlike sections 1-3 above).
+Now that all three are confirmed to be the same physical quantity (see
+the 2026-07-30 correction above), any remaining spread between them
+would be a genuine modeling difference in the three products' actual
+snowpack simulation, worth a real comparison once a winter-month
+snapshot exists.
 
 ---
 
@@ -270,11 +325,11 @@ difference between the three products' actual snowpack.
 
 ### What's different
 
-| Provider   | GHI                        | DHI                          | DNI                                                    |
-| ---------- | ---------------------------- | -------------------------------- | --------------------------------------------------------- |
-| COSMO-REA6 | `SWDIFDS_RAD + SWDIRS_RAD`   | `SWDIFDS_RAD` (native, exact)    | `SWDIRS_RAD / cos(θz)` (native, exact — not a GHI decomposition) |
-| ERA5-Land  | de-accumulated `ssrd`        | pvlib DIRINT decomposition of GHI (only option — no native split) | pvlib DIRINT decomposition of GHI |
-| MERRA-2    | `SWGDN` (already instantaneous) | pvlib DIRINT decomposition of GHI | pvlib DIRINT decomposition of GHI |
+| Provider   | GHI                             | DHI                                                               | DNI                                                              |
+| ---------- | ------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------- |
+| COSMO-REA6 | `SWDIFDS_RAD + SWDIRS_RAD`      | `SWDIFDS_RAD` (native, exact)                                     | `SWDIRS_RAD / cos(θz)` (native, exact — not a GHI decomposition) |
+| ERA5-Land  | de-accumulated `ssrd`           | pvlib DIRINT decomposition of GHI (only option — no native split) | pvlib DIRINT decomposition of GHI                                |
+| MERRA-2    | `SWGDN` (already instantaneous) | pvlib DIRINT decomposition of GHI                                 | pvlib DIRINT decomposition of GHI                                |
 
 This is the single biggest methodological difference between COSMO and
 the other two: COSMO-REA6's regional model separately simulates direct
@@ -293,11 +348,11 @@ cell, comparing COSMO's native values to a DIRINT decomposition of
 COSMO's own GHI (i.e. simulating what ERA5-Land/MERRA-2 are stuck
 doing) vs. the exact closure formula `(GHI-DHI)/cos(θz)`:
 
-| Estimate                              | bias        | MAE        | RMSE        | r      |
-| ---------------------------------------- | -------------: | -------------: | -------------: | -----: |
-| `DNI_pvlib_closure` (exact, known DHI)   |    +0.15 W/m^2 |    0.90 W/m^2 |    7.19 W/m^2 | 0.9992 |
-| `DNI_pvlib_dirint` (GHI-only decomp.)    |   +11.53 W/m^2 |   24.82 W/m^2 |   43.81 W/m^2 | 0.9717 |
-| `DHI_pvlib_dirint` (GHI-only decomp.)    |   -2.15 W/m^2  |    8.69 W/m^2 |   16.87 W/m^2 | 0.9835 |
+| Estimate                               |         bias |         MAE |        RMSE |      r |
+| -------------------------------------- | -----------: | ----------: | ----------: | -----: |
+| `DNI_pvlib_closure` (exact, known DHI) |  +0.15 W/m^2 |  0.90 W/m^2 |  7.19 W/m^2 | 0.9992 |
+| `DNI_pvlib_dirint` (GHI-only decomp.)  | +11.53 W/m^2 | 24.82 W/m^2 | 43.81 W/m^2 | 0.9717 |
+| `DHI_pvlib_dirint` (GHI-only decomp.)  |  -2.15 W/m^2 |  8.69 W/m^2 | 16.87 W/m^2 | 0.9835 |
 
 The exact closure formula (used when DHI is already known, as with
 COSMO) is essentially noise-level (RMSE 7 W/m^2). The GHI-only DIRINT
@@ -325,11 +380,11 @@ being in the rotated-pole frame, related to §6 below).
 
 ### What's different
 
-| Provider   | Fields          | Frame                                                    |
-| ---------- | ------------------ | ----------------------------------------------------------- |
-| COSMO-REA6 | `U_10M`, `V_10M`   | **rotated-pole grid**, not true north (see below)            |
-| ERA5-Land  | `u10`, `v10`       | true north (WGS84)                                            |
-| MERRA-2    | `U10M`, `V10M`     | true north (WGS84)                                            |
+| Provider   | Fields           | Frame                                             |
+| ---------- | ---------------- | ------------------------------------------------- |
+| COSMO-REA6 | `U_10M`, `V_10M` | **rotated-pole grid**, not true north (see below) |
+| ERA5-Land  | `u10`, `v10`     | true north (WGS84)                                |
+| MERRA-2    | `U10M`, `V10M`   | true north (WGS84)                                |
 
 All three compute scalar `WS_10M = sqrt(U^2 + V^2)`, which is rotation-
 invariant — comparable across all three regardless of frame. Wind
@@ -344,10 +399,10 @@ Whole-Europe domain stats, June 2018 (single-month snapshot, same run
 as section 4):
 
 | Provider   | WS_10M mean (m/s) | WS_10M max (m/s) |
-| ---------- | -------------------: | -------------------: |
-| COSMO-REA6 |                4.62 |               29.13 |
-| MERRA-2    |                4.49 |               22.25 |
-| ERA5-Land  |                2.58 |               20.86 |
+| ---------- | ----------------: | ---------------: |
+| COSMO-REA6 |              4.62 |            29.13 |
+| MERRA-2    |              4.49 |            22.25 |
+| ERA5-Land  |              2.58 |            20.86 |
 
 COSMO and MERRA-2 agree closely (4.62 vs 4.49); ERA5-Land reads ~45%
 lower.
@@ -385,11 +440,11 @@ computed.
 
 Whole-Europe domain stats, June 2018 (single-month snapshot):
 
-| Provider   | T mean (degC) | T range (degC) | PS mean (Pa) | PS range (Pa)      |
-| ---------- | ---------------: | ------------------: | ---------------: | ---------------------: |
-| COSMO-REA6 |           17.81 |     -11.82 to 49.52 |         99027.50 | 62621.06 to 107428.22 |
-| ERA5-Land  |           16.77 |      -7.14 to 44.86 |         97223.18 | 70831.94 to 103723.44 |
-| MERRA-2    |           15.37 |      -5.72 to 46.65 |         99230.93 | 76953.53 to 103646.67 |
+| Provider   | T mean (degC) |  T range (degC) | PS mean (Pa) |         PS range (Pa) |
+| ---------- | ------------: | --------------: | -----------: | --------------------: |
+| COSMO-REA6 |         17.81 | -11.82 to 49.52 |     99027.50 | 62621.06 to 107428.22 |
+| ERA5-Land  |         16.77 |  -7.14 to 44.86 |     97223.18 | 70831.94 to 103723.44 |
+| MERRA-2    |         15.37 |  -5.72 to 46.65 |     99230.93 | 76953.53 to 103646.67 |
 
 Spread is ~2.4 degC across the three (COSMO warmest, MERRA-2 coolest)
 and ~2000 Pa in pressure (ERA5-Land lowest). COSMO's much wider PS
@@ -424,11 +479,11 @@ index) rather than assume the raw indices line up. Full detail:
 
 ## 9. Grid and resolution: no cross-provider regridding
 
-| Provider   | Native grid                    | Cell size (approx.) |
-| ---------- | ---------------------------------- | ----------------------: |
-| COSMO-REA6 | rotated-pole, 824x848              |                   ~6 km |
-| ERA5-Land  | regular lat/lon                    |                  ~9-11 km (0.1 deg) |
-| MERRA-2    | regular lat/lon                    |                 ~35-55 km (0.5x0.625 deg) |
+| Provider   | Native grid           |       Cell size (approx.) |
+| ---------- | --------------------- | ------------------------: |
+| COSMO-REA6 | rotated-pole, 824x848 |                     ~6 km |
+| ERA5-Land  | regular lat/lon       |        ~9-11 km (0.1 deg) |
+| MERRA-2    | regular lat/lon       | ~35-55 km (0.5x0.625 deg) |
 
 `tests/compare_providers.py` snaps a requested lat/lon to each
 provider's *own nearest native cell independently* — it does not
