@@ -112,13 +112,27 @@ def export_netcdf(
     encoding = _build_encoding(ds, complevel=complevel)
     logger.info("Writing NetCDF to %s (complevel=%d)", output_path, complevel)
 
+    # Atomic write (temp -> rename): a direct ds.to_netcdf(output_path, ...)
+    # writes variable-by-variable into the target file in place, so any
+    # interruption mid-write (Ctrl-C, OOM kill, crash) leaves a truncated
+    # file sitting at the FINAL path -- which run_pipeline's naive
+    # `resume and out_path.exists()` check then treats as already done,
+    # silently baking a corrupt/incomplete month into the archive forever
+    # (found via a real interrupted run during this session: a killed
+    # process left a file with only 4 of 13 expected variables, and a
+    # subsequent --resume run skipped reprocessing it). Writing to a
+    # sibling .tmp path and renaming only after a full, successful write
+    # matches every other exporter in this repo (ERA5-Land/MERRA-2's
+    # export.py, boundary_repair.py's _write()).
     t1 = time.perf_counter()
+    tmp_path = output_path.with_suffix(".nc.tmp")
     ds.to_netcdf(
-        output_path,
+        tmp_path,
         encoding=encoding,
         format="NETCDF4",
         engine="netcdf4",
     )
+    tmp_path.replace(output_path)
     logger.info("  NetCDF write done in %.1f s", time.perf_counter() - t1)
 
     size_mb = output_path.stat().st_size / (1024 * 1024)

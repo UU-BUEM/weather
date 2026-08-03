@@ -222,7 +222,7 @@ class Era5Downloader(BaseDownloader):
             f"  area={request['area']}" if "area" in request else "",
         )
 
-        max_attempts = int(self._cfg.get("cds_max_retries", 5))
+        max_attempts = int(self._cfg.get("cds_max_retries", 10))
         base_delay, max_delay = 30.0, 900.0
         last_exc: BaseException | None = None
 

@@ -10,6 +10,10 @@ build/
 *.egg
 src/weather/_version.py
 
+# claude
+.claude/*
+CLAUDE.md
+
 # Conda build artifacts
 conda-bld-output/
 conda-bld/
@@ -83,3 +87,11 @@ uu-buem*.md
 # Unnecessary files
 src/weather/providers/main.py
 .github/skills/weather-runtime-error-debug/SKILL.md
+
+# Claude Code context (CLAUDE.md, .claude/) -- local-only, not pushed to
+# GitHub (2026-08-04): internal AI-agent working notes/incident log, not
+# meant for external/public browsing of this repo. Previously tracked
+# and already present in prior pushed commits/tags -- this only stops
+# future changes from being committed, it doesn't rewrite history.
+CLAUDE.md
+.claude/

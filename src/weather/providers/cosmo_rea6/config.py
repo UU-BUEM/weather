@@ -51,4 +51,5 @@ def get_config() -> dict[str, Any]:
         "decompressor": EnvSettings.cosmo_decompressor(),
         "conda_env": EnvSettings.cosmo_conda_env(),
         "cleanup": EnvSettings.cosmo_cleanup(),
+        "max_retries": EnvSettings.cosmo_max_retries(),
     }

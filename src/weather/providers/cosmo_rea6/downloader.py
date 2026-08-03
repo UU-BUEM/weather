@@ -85,4 +85,7 @@ class CosmoDownloader(BaseDownloader):
         logger.info(
             "Downloading %s -> %s", url, dest.name
         )
-        return download_https_atomic(url, dest, logger=logger)
+        return download_https_atomic(
+            url, dest, logger=logger,
+            max_retries=self._cfg.get("max_retries", 10),
+        )

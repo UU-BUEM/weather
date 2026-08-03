@@ -293,17 +293,18 @@ class Merra2Downloader(BaseDownloader):
         NASA sometimes reprocesses a month under a bumped runid). A 404
         is treated as immediately-fatal-for-this-stream (via
         :class:`_StreamNotFound`, not ``OSError``) so it moves to the next
-        candidate right away instead of burning 5 backoff retries on a
-        permanent failure; transient errors (503, timeouts, ...) still
-        retry against the same stream as before.
+        candidate right away instead of burning several backoff retries
+        on a permanent failure; transient errors (503, timeouts, ...)
+        still retry against the same stream as before.
         """
         dest = self.local_path(job)
         dest.parent.mkdir(parents=True, exist_ok=True)
         session = self._get_session()
         primary = _stream_prefix(job.year)
         candidates = (primary, primary + 1)
+        max_retries = self._cfg.get("opendap_max_retries", 10)
 
-        @exponential_backoff(max_attempts=5, exceptions=(OSError,))
+        @exponential_backoff(max_attempts=max_retries, exceptions=(OSError,))
         def _download(url: str) -> Path:
             tmp = dest.with_suffix(dest.suffix + ".part")
             logger.info("Fetching %s -> %s", job, dest.name)

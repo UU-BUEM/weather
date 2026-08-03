@@ -20,9 +20,14 @@ Pipeline flow
     run_pipeline(year=YYYY)
       ├── Phase 1 — Download (<=cds_max_concurrent CDS requests)
       │     12 months → download/ERA5_LAND_<YYYY>_<MM>_all_attrs.grib
-      └── Phase 2 — Transform + Export (per month, process pool)
-            cfgrib read → deaccum ssrd → GHI → night-mask
-            → output/ERA5_LAND_<YYYY>_<MM>_all_attrs.nc
+      ├── Phase 2 — Transform + Export (per month, process pool)
+      │     cfgrib read → deaccum ssrd → GHI → night-mask
+      │     → output/ERA5_LAND_<YYYY>_<MM>_all_attrs.nc
+      └── Phase 3 — Boundary repair (see
+            :mod:`~weather.providers.era5_land.boundary_repair`)
+            fixes each touched month's first-hour GHI/sf stamp using
+            its predecessor month (looked up disk-wide, so this is
+            always safe even for a single-month/partial-year run)
 
 Output files for all years land in a single ``output/`` folder, ready
 for ``common.merge`` (annual concat) and ``common.percentile_index``.
@@ -44,6 +49,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from ..base_downloader import DownloadJob
+from .boundary_repair import repair_boundaries
 from .config import get_config
 from .download import download_all
 from .downloader import ALL_ATTRS, Era5Downloader
@@ -132,6 +138,7 @@ def run_pipeline(
     skip_download: bool = False,
     resume: bool = False,
     cleanup: bool | None = None,
+    repair: bool = True,
 ) -> list[Path]:
     """Execute the ERA5-Land pipeline for *year*.
 
@@ -158,6 +165,14 @@ def run_pipeline(
         Remove the downloaded GRIB(s) after successful export.
         Default: ``config["cleanup"]`` (``ERA5_CLEANUP`` env var,
         itself defaulting to ``False`` -- keep everything).
+    repair : bool
+        Run :func:`~weather.providers.era5_land.boundary_repair.
+        repair_boundaries` over the months this call touched, right
+        after transform+export (default ``True`` -- this is a
+        mandatory step, not an optional extra; a month's first-hour
+        GHI/sf stamp is an implausible spike until it runs, see that
+        module's docstring). Disable only for synthetic/mocked runs
+        that don't produce real GHI/sf boundary structure.
 
     Returns
     -------
@@ -184,12 +199,12 @@ def run_pipeline(
 
     # ── Phase 1: Download ───────────────────────────────────────────
     if not skip_download:
-        logger.info("STEP 1/2: Downloading monthly GRIB files")
+        logger.info("STEP 1/3: Downloading monthly GRIB files")
         t1 = time.perf_counter()
         download_all(year=year, months=months)
         logger.info("  Download done in %.1f s", time.perf_counter() - t1)
     else:
-        logger.info("STEP 1/2: Download skipped (--skip-download)")
+        logger.info("STEP 1/3: Download skipped (--skip-download)")
 
     # Resolve GRIB paths via the downloader's own path logic.
     downloader = Era5Downloader(cfg)
@@ -202,7 +217,7 @@ def run_pipeline(
     }
 
     # ── Phase 2: Transform + Export (process pool over months) ──────
-    logger.info("STEP 2/2: Transform + export (%d workers)", ncores)
+    logger.info("STEP 2/3: Transform + export (%d workers)", ncores)
     t2 = time.perf_counter()
     out_dir = cfg["output_dir"]
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -238,6 +253,20 @@ def run_pipeline(
                 logger.info("  %s", msg)
 
     logger.info("  Transform+export done in %.1f s", time.perf_counter() - t2)
+
+    # ── Phase 3: Boundary repair (mandatory by default) ─────────────
+    # Only the months THIS run touched -- repair_boundaries() still
+    # looks up each one's predecessor across the whole output_dir, so
+    # this is safe even for a single-month/partial-year call.
+    if repair:
+        logger.info("STEP 3/3: Repairing month-boundary hour")
+        t3 = time.perf_counter()
+        repair_boundaries(out_dir, months={(year, m) for m in months})
+        logger.info(
+            "  Boundary repair done in %.1f s", time.perf_counter() - t3
+        )
+    else:
+        logger.info("STEP 3/3: Boundary repair skipped (repair=False)")
 
     # ── Optional cleanup of GRIBs ───────────────────────────────────
     if cleanup:

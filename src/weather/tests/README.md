@@ -10,10 +10,10 @@ a `test_*.py` file is something `pytest` will exercise.
 
 | Category | Files | Run via |
 | --- | --- | --- |
-| pytest unit tests | `test_validation.py`, `test_derived_attributes.py`, `test_pipeline_integration.py` | `pytest` |
+| pytest unit tests | `test_validation.py`, `test_derived_attributes.py`, `test_pipeline_integration.py`, `test_point_query.py`, `test_era5_boundary_repair.py`, `test_geo_countries.py` | `pytest` |
 | COSMO-REA6 pipeline runners | `test_cosmo_one_month.py`, `test_cosmo_one_year.py`, `test_cosmo_multi_year.py` | `python <file>.py --help` |
 | ERA5-Land pipeline runners | `test_era5_one_month.py`, `test_era5_one_year.py`, `test_era5_multi_year.py` | same |
-| ERA5-Land boundary tools | `repair_month_boundaries.py`, `verify_months.py` | same |
+| ERA5-Land boundary QA | `verify_months.py` | same |
 | ERA5-Land diagnostic scripts (historical) | `check_boundary_steps.py`, `check_first_hour.py`, `diagnose_nc.py`, `enumerate_month.py`, `inspect_era5_eccodes.py`, `inspect_era5_grib.py` | same |
 | MERRA-2 pipeline runners | `test_merra2_one_month.py`, `test_merra2_one_year.py`, `test_merra2_multi_year.py` | same |
 | Lint tool | `audit_imports.py` | `python audit_imports.py <files...>` |
@@ -35,12 +35,18 @@ Real, synthetic-data tests collected by `pytest -q --cov=weather` (the CI gate):
 | `test_validation.py` | `common/validate.py` and `common/cleanup.py` with temp files |
 | `test_derived_attributes.py` | `common/derived_attributes.py` — irradiance derivation (night masking, energy balance, no negatives) across all 3 providers |
 | `test_pipeline_integration.py` | `cosmo_rea6` pipeline/transform/config: checksum verification, path validation, GRIB error handling, environment validation (mocked, no network) |
+| `test_point_query.py` | `point_query.py`/`dni_reconstruction.py`/`geo_lookup.py` against synthetic NetCDFs shaped like each provider's real export |
+| `test_era5_boundary_repair.py` | `providers/era5_land/boundary_repair.py`'s `repair_boundaries()` against synthetic monthly fixtures (repair, idempotent skip, archive-start blanking, real gap, grid mismatch) |
+| `test_geo_countries.py` | `geo/countries.py`/`geo/bbox.py` — bbox lookup and coordinate conventions |
 
 ```bash
 conda activate weather_env
 pytest src/weather/tests/test_validation.py \
        src/weather/tests/test_derived_attributes.py \
-       src/weather/tests/test_pipeline_integration.py -v
+       src/weather/tests/test_pipeline_integration.py \
+       src/weather/tests/test_point_query.py \
+       src/weather/tests/test_era5_boundary_repair.py \
+       src/weather/tests/test_geo_countries.py -v
 ```
 
 ---
@@ -76,16 +82,18 @@ Common flags: `--work-dir DIR` · `--ncores N` · `--skip-download` ·
 
 ## ERA5-Land pipeline
 
-Execution order (boundary repair is **mandatory** before any analysis —
-see below):
+Execution order. Boundary repair (step "3b") is **mandatory** before any
+analysis, but now runs AUTOMATICALLY inside `run_pipeline()` itself (see
+`providers/era5_land/boundary_repair.py`) — it is no longer a separate
+manual step for a run through any of the three runners below:
 
 ```text
 1. test_era5_one_month.py  ← sanity check: single month
 2. test_era5_one_year.py   ← single year: 12 monthly NCs
 3. test_era5_multi_year.py ← all years: subprocesses test_era5_one_year.py per year
-4. repair_month_boundaries.py  ← mandatory: fixes the first-hour cross-month
-                                  accumulation defect in GHI/sf
-5. verify_months.py        ← QA report: run before AND after step 4
+   3b. (automatic, inside run_pipeline) boundary repair fixes the
+       first-hour cross-month accumulation defect in GHI/sf, per month
+4. verify_months.py        ← QA report: run any time to confirm status
 ```
 
 | File | Purpose |
@@ -104,37 +112,45 @@ Common flags: `--work-dir DIR` · `--ncores N` · `--skip-download` ·
 `--resume` · `--cleanup` · `--night-mask` (era5-only, default off).
 
 **Long unattended server runs:** prefer `scripts/run_era5_bulk.sh` (tmux
-wrapper: conda activation, logging, and the mandatory
-`repair_month_boundaries.py`/`verify_months.py` steps below, run
-automatically) over calling `test_era5_multi_year.py` directly. See
+wrapper: conda activation, logging, and a belt-and-suspenders whole-
+archive `boundary_repair.py`/`verify_months.py` pass, run automatically —
+per-month repair already happened inside step 3 above) over calling
+`test_era5_multi_year.py` directly. See
 `docs/BULK_RUN_GUIDE_ERA5-LAND.md` for the bottleneck analysis and
 parallelization guidance behind the recommended flags.
 
-### Boundary tools (mandatory step 4-5 above)
+### Boundary repair (automatic — see `providers/era5_land/boundary_repair.py`)
 
 ERA5-Land's monthly GRIB structure means each monthly file's **first**
 hourly stamp is a raw cross-month accumulation artifact for the
 accumulated variables (`GHI`, `sf`) — physically nonsensical until
-repaired. See `repair_month_boundaries.py`'s module docstring for the
-full mechanics.
+repaired. This is real pipeline logic (it mutates output `.nc` files),
+so — unlike everything else in this folder — it does NOT live in
+`tests/`; it lives in `providers/era5_land/boundary_repair.py`
+(`repair_boundaries()`), matching `percentile_index.py`'s precedent of
+substantial provider logic living in the provider package.
+`pipeline.py::run_pipeline()` calls it automatically as STEP 3/3 after
+every transform+export. See that module's docstring for the full
+mechanics. `test_era5_boundary_repair.py` above is the actual test for
+it (synthetic fixtures); `verify_months.py` below is read-only QA, not
+a test of the repair logic itself.
 
 | File | Purpose |
 | --- | --- |
-| `repair_month_boundaries.py` | Repairs every monthly file's first-hour `GHI`/`sf` value using the previous month's last-day sum. Non-destructive (original value preserved in `<var>_boundary_raw`), disk-based predecessor lookup (safe to run over any `--from-year`/`--to-year` range, or `--months YYYY-MM ...` for specific months), fully idempotent. |
-| `verify_months.py` | Read-only QA: hour counts, month span, cross-file continuity, boundary status, NaN profile. Run before **and** after repair to confirm the difference. |
+| `verify_months.py` | Read-only QA: hour counts, month span, cross-file continuity, boundary status, NaN profile. |
 
 ```bash
-python src/weather/tests/repair_month_boundaries.py               # whole archive
-python src/weather/tests/repair_month_boundaries.py --months 2019-01 2020-06
+python src/weather/providers/era5_land/boundary_repair.py               # whole archive
+python src/weather/providers/era5_land/boundary_repair.py --months 2019-01 2020-06
 python src/weather/tests/verify_months.py --lat 69.0 --lon 25.0    # optional point probe
 ```
 
 ### Diagnostic scripts (historical — kept for future investigations)
 
 Written to diagnose a specific GRIB de-accumulation/month-boundary
-anomaly (now understood and fixed by `repair_month_boundaries.py`
-above). Not part of the regular pipeline; no assertions, ad hoc CLI
-args, print-based output. Kept because the same class of anomaly could
+anomaly (now understood and fixed by `boundary_repair.py` above). Not
+part of the regular pipeline; no assertions, ad hoc CLI args,
+print-based output. Kept because the same class of anomaly could
 resurface with a future CDS/eccodes change, and re-deriving these from
 scratch would be slower than reading them.
 

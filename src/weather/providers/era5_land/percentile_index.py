@@ -26,8 +26,9 @@ Differences from COSMO
 - Source/target directories default to ``EnvSettings``-resolved paths
   (``era5_output_dir``), not hardcoded ``/data/soma`` paths.
 - Filename pattern is ``ERA5_LAND_<YYYY>_<MM>_all_attrs.nc``.
-- Boundary repair MUST have run first (see ``repair_month_boundaries.py``)
-  — an unrepaired first stamp would corrupt the January daily GHI sum.
+- Boundary repair MUST have run first (now automatic — see
+  ``boundary_repair.py`` and ``pipeline.py``'s STEP 3/3) — an unrepaired
+  first stamp would corrupt the January daily GHI sum.
 
 Run with ``--clean`` to remove existing output before re-running.
 Existing valid output files are skipped automatically.

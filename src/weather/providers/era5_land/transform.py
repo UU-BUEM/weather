@@ -229,8 +229,8 @@ def _deaccumulate_along_step(ds: xr.Dataset) -> xr.Dataset:
         #     This happens for exactly one message per monthly file: the
         #     previous month's last forecast day arrives with step 24
         #     only (no step 23).  Keeping the raw accumulated value there
-        #     (instead of NaN) lets repair_month_boundaries.py compute
-        #     the true increment later from the previous month's file:
+        #     (instead of NaN) lets boundary_repair.py compute the true
+        #     increment later from the previous month's file:
         #         increment = raw_first - sum(prev month's last-day
         #                                     increments 01:00..23:00)
         #     Ocean cells stay NaN throughout (a itself is NaN there).
@@ -245,8 +245,9 @@ def _deaccumulate_along_step(ds: xr.Dataset) -> xr.Dataset:
         deaccum.attrs["note"] = (
             "de-accumulated along forecast step (per-hour increment); "
             "the file's FIRST timestamp keeps the RAW accumulated value "
-            "(its predecessor lives in the previous month's file) — run "
-            "repair_month_boundaries.py before analysis"
+            "(its predecessor lives in the previous month's file) — "
+            "boundary_repair.py fixes this automatically (run_pipeline's "
+            "STEP 3/3)"
         )
         out[var] = deaccum
     return out
@@ -663,8 +664,9 @@ def build_monthly_dataset(
     # them.  What remains is exactly the calendar month,
     # <1st> 00:00 .. <last> 23:00.  The FIRST stamp keeps its RAW
     # accumulated value (its de-accumulation predecessor lives in the
-    # previous month's file); repair_month_boundaries.py converts it to a
-    # true hourly increment after all months exist.  This month's own
+    # previous month's file); boundary_repair.py converts it to a true
+    # hourly increment after all months exist (now automatic, see
+    # run_pipeline's STEP 3/3).  This month's own
     # final hour (<last> 23:00 -> 00:00) ships in the NEXT month's file.
     ds = ds.sortby("time")
     ds = _drop_empty_timestamps(ds)
@@ -704,14 +706,15 @@ def build_monthly_dataset(
     #
     # (The daily reset makes raw[step23] equal the sum of the first 23
     # hourly increments, which are exactly the previous file's last-day
-    # GHI values.)  Run repair_month_boundaries.py across the output
-    # folder BEFORE any analysis — until then the first stamp is a
+    # GHI values.)  boundary_repair.py now runs automatically as
+    # run_pipeline's STEP 3/3 — until it does, the first stamp is a
     # physically absurd flux (a whole day's total as one hour) and MUST
     # NOT be used directly.
     ds.attrs["boundary_status"] = (
         "UNREPAIRED: first timestamp holds the raw accumulated daily "
         "total / 3600, not an hourly flux.  Run "
-        "repair_month_boundaries.py before analysis."
+        "weather.providers.era5_land.boundary_repair.repair_boundaries() "
+        "before analysis."
     )
 
     # Scalar wind speed from the u/v components.

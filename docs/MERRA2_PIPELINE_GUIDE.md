@@ -141,7 +141,8 @@ onto the other's index), rather than assuming the raw indices match.
 ### GHI = SWGDN directly (no de-accumulation)
 
 Unlike ERA5-Land's accumulated `ssrd` (which needs de-accumulation and
-month-boundary repair — see `repair_month_boundaries.py`), MERRA-2's
+month-boundary repair — see `providers/era5_land/boundary_repair.py`),
+MERRA-2's
 `SWGDN` is an **instantaneous** flux. GHI is simply `SWGDN`,
 night-masked via `weather.common.derived_attributes.apply_derived_fields
 (ds, "MERRA2", sol_pos, times, fields=["GHI"])`. No boundary bookkeeping

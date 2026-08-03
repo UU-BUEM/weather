@@ -46,4 +46,5 @@ def get_config() -> dict[str, Any]:
         # GES DISC OPeNDAP has no CDS-style per-account job queue, so
         # this can be higher than ERA5's cds_max_concurrent=1.
         "opendap_max_concurrent": EnvSettings.merra2_opendap_max_concurrent(),
+        "opendap_max_retries": EnvSettings.merra2_opendap_max_retries(),
     }

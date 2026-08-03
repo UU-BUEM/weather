@@ -222,6 +222,17 @@ class EnvSettings:
         return _env_bool("COSMO_CLEANUP", False)
 
     @staticmethod
+    def cosmo_max_retries() -> int:
+        """Retry attempts for a transient DWD download failure
+        (COSMO_MAX_RETRIES, default 10).
+
+        Single source of truth for ``downloader.py``'s call into
+        ``common.download.download_https_atomic`` -- change the env var
+        once instead of a hardcoded literal at the call site.
+        """
+        return int(os.getenv("COSMO_MAX_RETRIES", "10"))
+
+    @staticmethod
     def cosmo_log_dir() -> Path:
         """Directory for pipeline run logs (COSMO_LOG_DIR).
 
@@ -376,6 +387,17 @@ class EnvSettings:
         """
         return int(os.getenv("MERRA2_OPENDAP_MAX_CONCURRENT", "8"))
 
+    @staticmethod
+    def merra2_opendap_max_retries() -> int:
+        """Retry attempts for a transient GES DISC failure
+        (MERRA2_OPENDAP_MAX_RETRIES, default 10).
+
+        Single source of truth for ``downloader.py``'s
+        ``exponential_backoff`` call -- change the env var once instead
+        of a hardcoded literal at the call site.
+        """
+        return int(os.getenv("MERRA2_OPENDAP_MAX_RETRIES", "10"))
+
     # ------------------------------------------------------------------
     # ERA5-Land
     # ------------------------------------------------------------------
@@ -526,6 +548,18 @@ class EnvSettings:
         environments such as CI secrets or scheduler exports.
         """
         return os.getenv("ERA5_CDS_KEY", "").strip()
+
+    @staticmethod
+    def era5_cds_max_retries() -> int:
+        """Retry attempts for a transient CDS failure
+        (ERA5_CDS_MAX_RETRIES, default 10).
+
+        Single source of truth for ``downloader.py``'s retry loop --
+        previously read directly via ``os.getenv`` in ``config.py``
+        (default 5); centralized here to match COSMO's and MERRA-2's
+        equivalent knobs.
+        """
+        return int(os.getenv("ERA5_CDS_MAX_RETRIES", "10"))
 
     @staticmethod
     def era5_slurm_partition() -> str:

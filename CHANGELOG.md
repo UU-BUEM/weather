@@ -9,6 +9,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-08-04
+
+### Fixed
+
+- **`get_point_weather()` — 3 real bugs found and fixed against real archives**
+  (previously only smoke-tested against synthetic fixtures):
+  - MERRA-2: a mid-migration archive (some months regenerated with the
+    canonical `T`/`U_10M`/etc. names, others still on legacy `T2M`/`U10M`/
+    etc.) merged into two separate variables per name, and the old
+    `"T" in cell` check silently picked the mostly-NaN one. `point_query.py`
+    now renames each file's legacy name to canonical per file, before
+    combining.
+  - COSMO-REA6: a mid-migration archive (some months with 2-D lat/lon
+    coordinates, others without) raised `ValueError: 'latitude' not present
+    in all datasets'` from `combine="by_coords"`. Fixed by resolving the
+    nearest cell index from whichever month has coordinates and reusing it
+    across every month.
+  - ERA5-Land: an unrepaired month's first-hour `GHI` (a raw accumulated
+    daily total, not an hourly flux — see `boundary_repair.py` below) was
+    silently returned as-is. `point_query.py` now checks `boundary_status`
+    per file and raises `RuntimeError` instead.
+- **`export_netcdf()` — real data-corruption bug, all three providers**
+  (`cosmo_rea6`/`era5_land`/`merra2`). Writing directly to the final path
+  with no temp-file-then-rename meant an interrupted write (Ctrl-C, OOM,
+  crash) left a truncated file at the final name, which `--resume`'s naive
+  `Path.exists()` check then treated as complete forever. All three
+  `export.py` now write to a sibling `.tmp` path and `Path.replace()` only
+  on success.
+- Packaging: dropped a real, undeclared runtime dependency on `dask` from
+  the ERA5-Land/MERRA-2 point-query path (`xr.open_mfdataset` requires the
+  dask chunk manager even with no `chunks=` argument), contradicting the
+  `pointquery` extra's explicit no-dask design goal.
+
+### Added
+
+- `COSMO_MAX_RETRIES` / `ERA5_CDS_MAX_RETRIES` / `MERRA2_OPENDAP_MAX_RETRIES`
+  — download retry-attempt count is now a real config knob for all three
+  providers (was: COSMO hardcoded to 10, ERA5-Land configurable but
+  defaulting to 5, MERRA-2 hardcoded to 5 with no knob at all). All three
+  now default to 10, resolved via `EnvSettings`.
+- `providers/era5_land/boundary_repair.py`'s `repair_boundaries()` now runs
+  automatically as `run_pipeline()`'s STEP 3/3 after every transform+export
+  (new `repair: bool = True` parameter), for just the months that run
+  touched — no separate manual step needed for a run through this repo.
+- `tests/test_era5_boundary_repair.py` (7 tests against synthetic fixtures).
+
+### Changed
+
+- ERA5-Land's boundary-repair logic relocated from `tests/
+  repair_month_boundaries.py` to `providers/era5_land/boundary_repair.py`
+  — real pipeline logic that mutates output files belongs in the provider
+  package, not `tests/` (mirrors `percentile_index.py`'s existing
+  precedent). Breaking CLI path change for anyone invoking the old script
+  path directly (same category of change as the COSMO `--cleanup` flag
+  rename in 1.5.3).
+- `CLAUDE.md`/`.claude/` are no longer tracked in git (internal AI-agent
+  working notes, not meant for public browsing) — see `.gitignore`.
+
 ## [1.6.0] - 2026-07-30
 
 ### Added

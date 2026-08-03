@@ -1,9 +1,11 @@
-#!/usr/bin/env python3
 """Repair the month-boundary hour across ERA5-Land NetCDFs.
 
-Run over the output folder after monthly transforms and BEFORE any
-analysis (percentile etc.). This is a mandatory pipeline step for every
-accumulated variable's first hourly stamp.
+Runs automatically as the last phase of :func:`~weather.providers.
+era5_land.pipeline.run_pipeline`, and can also be invoked directly as a
+script over an arbitrary output folder. This is a mandatory step for
+every accumulated variable's first hourly stamp -- it must complete
+before any analysis (percentile indexing, point queries, etc.) touches
+the archive.
 
 Background
 ----------
@@ -42,7 +44,7 @@ Predecessor lookup is always disk-based, not list-adjacency-based
 Every month's predecessor is looked up directly in *output_dir* by its
 computed (year, month) filename, regardless of whether that predecessor
 file was created in this run/session or falls outside a requested
-``--from-year``/``--to-year``/``--months`` filter. This makes repairing
+``from_year``/``to_year``/``months`` filter. This makes repairing
 partial ranges (or a specific list of months) always safe: a month is
 only ever treated as the true archive start if its predecessor genuinely
 does not exist ANYWHERE in *output_dir* (checked against the whole
@@ -59,19 +61,22 @@ never overwritten). This means:
 * A repair can always be recomputed/audited later from the true raw
   source, even after the visible variable has been modified.
 * If a file was ever mis-repaired (e.g. by an older version of this
-  script that assumed list-adjacency), it self-heals automatically the
-  next time this script runs: it recomputes from ``<var>_boundary_raw``,
-  not from the already-modified value.
+  module that assumed list-adjacency), it self-heals automatically the
+  next time it runs: it recomputes from ``<var>_boundary_raw``, not from
+  the already-modified value.
 
 Usage
 -----
-::
+Called automatically by ``run_pipeline()`` after transform+export, for
+just the months that run touched (predecessors are still looked up
+disk-wide, so this is always safe). To repair an arbitrary folder
+directly::
 
-    python repair_month_boundaries.py                    # uses ERA5 output_dir
-    python repair_month_boundaries.py /data/soma/era5_land/output
-    python repair_month_boundaries.py <dir> --dry-run
-    python repair_month_boundaries.py <dir> --from-year 1950 --to-year 2025
-    python repair_month_boundaries.py <dir> --months 2019-01 2020-06
+    python boundary_repair.py                    # uses ERA5 output_dir
+    python boundary_repair.py /data/soma/era5_land/output
+    python boundary_repair.py <dir> --dry-run
+    python boundary_repair.py <dir> --from-year 1950 --to-year 2025
+    python boundary_repair.py <dir> --months 2019-01 2020-06
 
 ``--months`` repairs only the exact months given (space-separated
 ``YYYY-MM`` tokens) instead of a ``--from-year``/``--to-year`` range —
@@ -96,13 +101,6 @@ import re
 import sys
 from pathlib import Path
 
-from weather.providers.era5_land.config import get_config
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
 logger = logging.getLogger("boundary_repair")
 
 _PATTERN = re.compile(r"ERA5_LAND_(\d{4})_(\d{2})_all_attrs\.nc$")
@@ -156,8 +154,8 @@ def _predecessor(year: int, month: int) -> tuple[int, int]:
 
 def _find_on_disk(out_dir: Path, year: int, month: int) -> Path | None:
     """Return the monthly file for *year*-*month* if it exists anywhere
-    in *out_dir* — independent of any ``--from-year``/``--to-year``/
-    ``--months`` filter.
+    in *out_dir* — independent of any ``from_year``/``to_year``/
+    ``months`` filter.
     """
     p = out_dir / f"ERA5_LAND_{year}_{month:02d}_all_attrs.nc"
     return p if p.exists() else None
@@ -294,71 +292,66 @@ def _parse_months(tokens: list[str]) -> set[tuple[int, int]]:
     return wanted
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    ap.add_argument(
-        "output_dir", nargs="?", default=None,
-        help=(
-            "Folder of monthly ERA5_LAND_*_all_attrs.nc files. "
-            "Default: <ERA5_WORK_DIR>/output (same as the era5_land "
-            "pipeline's output_dir, from .env / ERA5_WORK_DIR)."
-        ),
-    )
-    ap.add_argument("--from-year", type=int, default=None)
-    ap.add_argument("--to-year", type=int, default=None)
-    ap.add_argument(
-        "--months", nargs="+", default=None, metavar="YYYY-MM",
-        help=(
-            "Repair only these exact months (e.g. --months 2019-01 "
-            "2020-06), instead of a --from-year/--to-year range. Each "
-            "month's predecessor is still looked up across the whole "
-            "output_dir, so the list need not be contiguous."
-        ),
-    )
-    ap.add_argument("--dry-run", action="store_true")
-    args = ap.parse_args()
+def repair_boundaries(
+    output_dir: Path,
+    *,
+    from_year: int | None = None,
+    to_year: int | None = None,
+    months: set[tuple[int, int]] | None = None,
+    dry_run: bool = False,
+) -> dict[str, int]:
+    """Repair the month-boundary hour across *output_dir*'s monthly files.
 
-    out_dir = (
-        Path(args.output_dir) if args.output_dir is not None
-        else get_config()["output_dir"]
-    )
-    if not out_dir.is_dir():
-        sys.exit(f"not a directory: {out_dir}")
-    logger.info("Output dir: %s", out_dir)
+    Parameters
+    ----------
+    output_dir : Path
+        Folder of ``ERA5_LAND_<YYYY>_<MM>_all_attrs.nc`` files.
+    from_year, to_year : int, optional
+        Restrict to a year range (ignored if *months* is given).
+    months : set of (year, month), optional
+        Repair only these exact months instead of a year range. Each
+        month's predecessor is still looked up across the whole
+        *output_dir*, so the set need not be contiguous.
+    dry_run : bool
+        Log what would change without writing anything.
 
+    Returns
+    -------
+    dict
+        ``{"repaired": int, "skipped": int, "gaps": int, "errors": int}``.
+    """
     import numpy as np
     import xarray as xr
 
-    all_files = _discover(out_dir, None, None)
+    output_dir = Path(output_dir)
+    all_files = _discover(output_dir, None, None)
     if not all_files:
-        sys.exit("No monthly files found.")
+        logger.warning("No monthly files found in %s", output_dir)
+        return {"repaired": 0, "skipped": 0, "gaps": 0, "errors": 0}
     earliest = (all_files[0][0], all_files[0][1])
 
-    if args.months:
-        wanted = _parse_months(args.months)
+    if months:
         by_key = {(y, m): p for y, m, p in all_files}
-        missing = sorted(wanted - set(by_key))
+        missing = sorted(months - set(by_key))
         if missing:
-            sys.exit(
-                "Requested --months not found in "
-                f"{out_dir}: {[f'{y}-{m:02d}' for y, m in missing]}"
+            raise FileNotFoundError(
+                f"Requested months not found in {output_dir}: "
+                f"{[f'{y}-{m:02d}' for y, m in missing]}"
             )
-        files = [(y, m, by_key[(y, m)]) for y, m in sorted(wanted)]
+        files = [(y, m, by_key[(y, m)]) for y, m in sorted(months)]
     else:
-        files = _discover(out_dir, args.from_year, args.to_year)
+        files = _discover(output_dir, from_year, to_year)
         if not files:
-            sys.exit("No monthly files found in the given year range.")
+            logger.warning("No monthly files found in the given year range.")
+            return {"repaired": 0, "skipped": 0, "gaps": 0, "errors": 0}
 
-    logger.info("Checking %d monthly file(s).", len(files))
+    logger.info("Checking %d monthly file(s) in %s.", len(files), output_dir)
 
     repaired = skipped = gaps = errors = 0
 
     for cy, cm, cpath in files:
         py, pm = _predecessor(cy, cm)
-        ppath = _find_on_disk(out_dir, py, pm)
+        ppath = _find_on_disk(output_dir, py, pm)
         is_earliest = (cy, cm) == earliest
 
         with xr.open_dataset(cpath) as probe:
@@ -377,7 +370,7 @@ def main() -> None:
                 # on disk. Blank the main variable's first stamp (it is
                 # not a usable hourly flux), but the true raw value
                 # lives on forever in <var>_boundary_raw.
-                if args.dry_run:
+                if dry_run:
                     logger.info(
                         "%d-%02d (archive start): first stamp -> NaN "
                         "[dry-run]", cy, cm,
@@ -405,7 +398,7 @@ def main() -> None:
                     "%d-%02d: predecessor %d-%02d not found anywhere in "
                     "%s, and this is not the archive's earliest file "
                     "(%d-%02d) — real gap; leaving UNREPAIRED.",
-                    cy, cm, py, pm, out_dir, *earliest,
+                    cy, cm, py, pm, output_dir, *earliest,
                 )
                 gaps += 1
             continue
@@ -434,9 +427,9 @@ def main() -> None:
                 logger.info(
                     "%d-%02d  %-4s @ %s: %d cell(s) repaired%s",
                     cy, cm, var, t0, n_ok,
-                    "  [dry-run]" if args.dry_run else "",
+                    "  [dry-run]" if dry_run else "",
                 )
-                if not args.dry_run:
+                if not dry_run:
                     vals = cur[var].values
                     vals[0] = new_first
                     cur[var] = (cur[var].dims, vals, cur[var].attrs)
@@ -467,6 +460,71 @@ def main() -> None:
     if errors:
         logger.warning("  errors   : %d (see messages above)", errors)
     logger.info("=" * 60)
+
+    return {
+        "repaired": repaired, "skipped": skipped,
+        "gaps": gaps, "errors": errors,
+    }
+
+
+def main() -> None:
+    # Absolute import (not relative `.config`) so this module keeps
+    # working when run as a direct script path (`python
+    # .../boundary_repair.py`), not just via `python -m
+    # weather.providers.era5_land.boundary_repair` -- a relative import
+    # here breaks under direct-file-path invocation with "attempted
+    # relative import with no known parent package" (confirmed the hard
+    # way: percentile_index.py has this exact latent bug today).
+    from weather.providers.era5_land.config import get_config
+
+    ap = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    ap.add_argument(
+        "output_dir", nargs="?", default=None,
+        help=(
+            "Folder of monthly ERA5_LAND_*_all_attrs.nc files. "
+            "Default: <ERA5_WORK_DIR>/output (same as the era5_land "
+            "pipeline's output_dir, from .env / ERA5_WORK_DIR)."
+        ),
+    )
+    ap.add_argument("--from-year", type=int, default=None)
+    ap.add_argument("--to-year", type=int, default=None)
+    ap.add_argument(
+        "--months", nargs="+", default=None, metavar="YYYY-MM",
+        help=(
+            "Repair only these exact months (e.g. --months 2019-01 "
+            "2020-06), instead of a --from-year/--to-year range. Each "
+            "month's predecessor is still looked up across the whole "
+            "output_dir, so the list need not be contiguous."
+        ),
+    )
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    out_dir = (
+        Path(args.output_dir) if args.output_dir is not None
+        else get_config()["output_dir"]
+    )
+    if not out_dir.is_dir():
+        sys.exit(f"not a directory: {out_dir}")
+    logger.info("Output dir: %s", out_dir)
+
+    months = _parse_months(args.months) if args.months else None
+    repair_boundaries(
+        out_dir,
+        from_year=args.from_year,
+        to_year=args.to_year,
+        months=months,
+        dry_run=args.dry_run,
+    )
 
 
 if __name__ == "__main__":

@@ -144,11 +144,16 @@ ps aux | grep test_era5                         # still alive?
 ## 4. Pipeline order (strict)
 
 ```text
-1. transform all months          (test_era5_multi_year.py)
-2. repair_month_boundaries.py    <-- MANDATORY before analysis
-3. verify_months.py              (confirm all repaired)
+1. transform + export each month  (test_era5_multi_year.py)
+2. boundary repair                <-- MANDATORY; now automatic, runs
+                                       inside run_pipeline() itself
+                                       (providers/era5_land/
+                                       boundary_repair.py, STEP 3/3)
+3. verify_months.py                (confirm all repaired)
 4. percentile / downstream
 ```
 
-Until step 2 runs, every month's first stamp holds a raw daily total
-(thousands of W/m^2) and MUST NOT be used.
+Until step 2 runs for a given month, its first stamp holds a raw daily
+total (thousands of W/m^2) and MUST NOT be used. A month is only ever
+left `UNREPAIRED` on purpose when its predecessor genuinely doesn't
+exist anywhere on disk yet (a real gap, not a bug).

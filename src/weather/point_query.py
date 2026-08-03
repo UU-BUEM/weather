@@ -117,21 +117,53 @@ def _temperature_series(cell: Any, legacy_name: str) -> pd.Series:
     return cell[legacy_name].to_series()
 
 
-def _pressure_series(cell: Any, legacy_name: str) -> pd.Series | None:
-    """Return the Pa pressure Series, tolerating pre-fix archives.
+def _regular_grid_preprocess(
+    legacy_temperature_var: str,
+    legacy_pressure_var: str,
+    unrepaired: list[str],
+):
+    """Build a per-file normalization hook, applied to each monthly file
+    right after it is opened, BEFORE its cell is extracted.
 
-    ERA5-Land and MERRA-2 now both export a canonical ``PS`` column
-    (matching COSMO-REA6); archives produced before that rename carry
-    ERA5-Land's raw ``sp`` instead (MERRA-2 was already ``PS``, so its
-    legacy name is the same as the canonical one -- a harmless no-op
-    lookup). ``None`` if neither is present (falls back to the
-    scalar/no-pressure path in :func:`reconstruct_dni_dhi`).
+    Two real, independent hazards show up in a multi-month archive that
+    is mid-migration (some months regenerated, some not):
+
+    1. **Split naming.**  A file's legacy variable name (e.g. MERRA-2's
+       ``T2M``) is renamed to its canonical name (``T``) here whenever
+       the canonical name is absent, so every month contributes to the
+       SAME merged variable.  Doing this on the already-merged dataset
+       (the previous approach) instead creates two separate variables
+       when different months use different names — e.g. a real MERRA-2
+       2018 archive where only March was regenerated with ``T``: the
+       other 11 months' ``T2M`` merges in as a second variable, and
+       ``cell["T"]`` silently resolves to the mostly-NaN one (populated
+       only for March's 744 hours) instead of raising.
+    2. **Unrepaired ERA5-Land boundary artifact.**  ``transform.py``
+       deliberately leaves each month's FIRST hourly ``GHI``/``sf`` stamp
+       as the raw accumulated daily total (not a real flux) until
+       :func:`weather.providers.era5_land.boundary_repair.
+       repair_boundaries` runs across the output folder (now automatic —
+       see that module's docstring and ``pipeline.py``'s STEP 3/3) — an
+       implausible multi-thousand W/m^2 spike if read directly.  Flag any
+       file whose ``boundary_status`` doesn't confirm repair; MERRA-2
+       files never set this attribute, so the check is a no-op for that
+       provider.
     """
-    if "PS" in cell:
-        return cell["PS"].to_series()
-    if legacy_name in cell:
-        return cell[legacy_name].to_series()
-    return None
+
+    def _preprocess(ds: Any) -> Any:
+        status = str(ds.attrs.get("boundary_status", ""))
+        if status and not status.startswith("BOUNDARY_REPAIRED"):
+            source = ds.encoding.get("source", "<unknown file>")
+            unrepaired.append(Path(source).name)
+
+        renames = {}
+        if "T" not in ds.variables and legacy_temperature_var in ds.variables:
+            renames[legacy_temperature_var] = "T"
+        if "PS" not in ds.variables and legacy_pressure_var in ds.variables:
+            renames[legacy_pressure_var] = "PS"
+        return ds.rename(renames) if renames else ds
+
+    return _preprocess
 
 
 def _get_point_regular_grid(
@@ -145,7 +177,20 @@ def _get_point_regular_grid(
     legacy_pressure_var: str,
     legacy_temperature_var: str,
 ) -> pd.DataFrame:
-    """Shared point extraction for ERA5-Land/MERRA-2's regular lat/lon grid."""
+    """Shared point extraction for ERA5-Land/MERRA-2's regular lat/lon grid.
+
+    Opens each monthly file independently via ``xr.open_dataset`` rather
+    than ``xr.open_mfdataset`` — point_query's whole reason to exist is
+    extracting one cell from an already-processed archive without pulling
+    in the heavy ``pipeline`` extra's dependencies (the ``pointquery``
+    extra in ``pyproject.toml`` is deliberately scoped to xarray/netcdf4
+    only). ``open_mfdataset`` looks read-only but always needs the dask
+    chunk manager internally: it calls ``open_dataset(path, chunks={})``
+    per file even when the caller never passed a ``chunks=`` argument,
+    and a non-``None`` ``chunks`` forces dask-backed arrays — a genuine
+    ``ImportError`` under a clean ``pip install weather[pointquery]``,
+    not merely a style preference.
+    """
     xr = _import_xarray()
     out_dir = _output_dir(canonical, data_dir)
     paths = sorted(out_dir.glob(filename_glob))
@@ -156,16 +201,53 @@ def _get_point_regular_grid(
             "first (weather run --provider "
             f"{canonical} --year {year})."
         )
-    ds = xr.open_mfdataset([str(p) for p in paths], combine="by_coords")
-    cell = ds.sel(latitude=latitude, longitude=longitude, method="nearest")
 
-    ghi = cell["GHI"].to_series()
-    t = _temperature_series(cell, legacy_temperature_var)
-    pressure = _pressure_series(cell, legacy_pressure_var)
+    unrepaired: list[str] = []
+    preprocess = _regular_grid_preprocess(
+        legacy_temperature_var, legacy_pressure_var, unrepaired
+    )
+    ghi_parts: list[pd.Series] = []
+    t_parts: list[pd.Series] = []
+    ps_parts: list[pd.Series] = []
+    cell_lat, cell_lon = latitude, longitude
+    for p in paths:
+        with xr.open_dataset(str(p)) as raw:
+            ds = preprocess(raw)
+            if "latitude" not in ds.coords or "longitude" not in ds.coords:
+                raise KeyError(
+                    f"{p.name} has no latitude/longitude coordinates (dims "
+                    f"only: {list(ds.dims)}); it predates {canonical}'s "
+                    "coordinate-retention convention. Re-run the pipeline's "
+                    "transform+export phase for this file to regenerate it "
+                    "with per-cell coordinates."
+                )
+            cell = ds.sel(latitude=latitude, longitude=longitude, method="nearest")
+            ghi_parts.append(cell["GHI"].to_series())
+            t_parts.append(cell["T"].to_series())
+            if "PS" in cell:
+                ps_parts.append(cell["PS"].to_series())
+            cell_lat = float(cell["latitude"])
+            cell_lon = float(cell["longitude"])
+
+    if unrepaired:
+        raise RuntimeError(
+            f"{canonical} archive has {len(unrepaired)} unrepaired month(s) "
+            f"under {out_dir}: {sorted(unrepaired)}. Their first hourly "
+            "GHI/SNOWFALL stamp still holds a raw accumulated daily total "
+            "(an implausible spike, not a real flux) rather than an hourly "
+            "flux. Run weather.providers.era5_land.boundary_repair."
+            "repair_boundaries() (or `python -m weather.providers."
+            "era5_land.boundary_repair`) against this output directory "
+            "before using it for point queries."
+        )
+
+    ghi = pd.concat(ghi_parts).sort_index()
+    t = pd.concat(t_parts).sort_index()
+    pressure = pd.concat(ps_parts).sort_index() if ps_parts else None
     dni_dhi = reconstruct_dni_dhi(
         ghi,
-        float(cell["latitude"]),
-        float(cell["longitude"]),
+        cell_lat,
+        cell_lon,
         method="dirint",
         pressure=pressure,
     )
@@ -206,7 +288,7 @@ def _get_point_cosmo_rea6(
 
     annual_path = out_dir / f"COSMO_REA6_{year}.nc"
     if annual_path.exists():
-        ds = xr.open_dataset(str(annual_path))
+        datasets = [xr.open_dataset(str(annual_path))]
     else:
         paths = sorted(out_dir.glob(f"COSMO_REA6_{year}_??_all_attrs.nc"))
         if not paths:
@@ -217,15 +299,41 @@ def _get_point_cosmo_rea6(
                 f"{year} first (weather run --provider cosmo-rea6 --year "
                 f"{year})."
             )
-        ds = xr.open_mfdataset([str(p) for p in paths], combine="by_coords")
+        # Open each monthly file independently rather than
+        # xr.open_mfdataset(..., combine="by_coords"): a real COSMO
+        # archive can straddle the lat/lon-retention fix (some months
+        # regenerated with 2-D latitude/longitude coordinates, others
+        # not — see NEXT MAJOR TASKS item 5/6 in CLAUDE.md).
+        # combine="by_coords" raises "'latitude' not present in all
+        # datasets" the instant one month has the coordinate and
+        # another doesn't. The physical (y, x) grid is identical across
+        # every COSMO export regardless of whether a given month's file
+        # carries the coordinate labels, so the nearest cell is resolved
+        # ONCE from whichever file has them and the same index is
+        # selected from every file.
+        datasets = [xr.open_dataset(str(p)) for p in paths]
 
-    iy, ix = find_nearest_cell(ds, latitude, longitude)
-    cell = ds.isel(y=iy, x=ix)
+    ref = next(
+        (d for d in datasets if "latitude" in d.coords and "longitude" in d.coords),
+        None,
+    )
+    if ref is None:
+        for d in datasets:
+            d.close()
+        raise KeyError(
+            f"No processed cosmo-rea6 file for {year} under {out_dir} has "
+            "latitude/longitude coordinates; re-run the pipeline's "
+            "transform+export phase to regenerate them."
+        )
+    iy, ix = find_nearest_cell(ref, latitude, longitude)
+    cell_lat = float(ref["latitude"].isel(y=iy, x=ix))
+    cell_lon = float(ref["longitude"].isel(y=iy, x=ix))
 
-    ghi = cell["GHI"].to_series()
-    t = _temperature_series(cell, "T_2M")
-    cell_lat = float(cell["latitude"]) if "latitude" in cell.coords else latitude
-    cell_lon = float(cell["longitude"]) if "longitude" in cell.coords else longitude
+    cells = [d.isel(y=iy, x=ix) for d in datasets]
+    ghi = pd.concat([c["GHI"].to_series() for c in cells]).sort_index()
+    t = pd.concat([_temperature_series(c, "T_2M") for c in cells]).sort_index()
+    for d in datasets:
+        d.close()
 
     # COSMO-REA6's own per-cell DNI (present when compute_dni_field=True at
     # pipeline time) is explicitly experimental/unreliable near the horizon

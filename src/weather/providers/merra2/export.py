@@ -115,13 +115,23 @@ def export_netcdf(
     encoding = _build_encoding(ds, complevel=complevel)
     logger.info("Writing NetCDF: %s (complevel=%d)", output_path, complevel)
 
+    # Atomic write (temp -> rename): writing directly to output_path means
+    # any interruption mid-write (Ctrl-C, OOM kill, crash) leaves a
+    # truncated file at the FINAL path, which a later --resume run's naive
+    # `out_path.exists()` check then treats as already complete forever --
+    # silently baking a corrupt/incomplete month into the archive (found
+    # via a real interrupted COSMO-REA6 run this session; applied here too
+    # since this exporter had the identical gap). Matches
+    # repair_month_boundaries.py/boundary_repair.py's own _write().
     t1 = time.perf_counter()
+    tmp_path = output_path.with_suffix(".nc.tmp")
     ds.to_netcdf(
-        output_path,
+        tmp_path,
         encoding=encoding,
         format="NETCDF4",
         engine="netcdf4",
     )
+    tmp_path.replace(output_path)
     logger.info("  Write done in %.1f s", time.perf_counter() - t1)
 
     size_mb = output_path.stat().st_size / (1024 * 1024)

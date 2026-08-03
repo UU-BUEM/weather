@@ -7,11 +7,18 @@
 # on a plain (non-SLURM) server:
 #
 #   1. test_era5_multi_year.py    download + transform + export (per year)
-#   2. repair_month_boundaries.py mandatory: fix first-hour GHI/sf boundary
+#      -- boundary repair now ALSO runs automatically inside
+#         run_pipeline() itself (STEP 3/3) for each month it touches, so
+#         step 2 below is belt-and-suspenders, not the only enforcement
+#         point.
+#   2. boundary_repair.py         whole-archive sweep: fix first-hour
+#                                 GHI/sf boundary for any month an OLDER
+#                                 checkout (predating the STEP 3/3 wiring)
+#                                 may have left unrepaired
 #   3. verify_months.py           QA report over the whole output folder
 #
 # Steps 2-3 always run over the WHOLE output directory (not just the years
-# passed to this call) — repair_month_boundaries.py is fully idempotent and
+# passed to this call) — boundary_repair.py is fully idempotent and
 # disk-based, so re-running it on already-repaired months is a cheap no-op,
 # and this way an incremental/partial bulk run always keeps the entire
 # archive self-consistent, not just the slice touched this time.
@@ -22,8 +29,8 @@
 #
 # All arguments are forwarded verbatim to test_era5_multi_year.py only (not
 # to repair/verify, which always run whole-archive with defaults). Run
-# repair_month_boundaries.py / verify_months.py directly for more granular
-# control (e.g. --months, --dry-run, --lat/--lon point probes).
+# providers/era5_land/boundary_repair.py / verify_months.py directly for
+# more granular control (e.g. --months, --dry-run, --lat/--lon point probes).
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -65,10 +72,12 @@ python "${COSMO_SRC_DIR}/weather/tests/test_era5_multi_year.py" "$@" \
 pipeline_status="${PIPESTATUS[0]}"
 set -e
 
-# ── Step 2: Boundary repair (mandatory, whole archive, idempotent) ─────────
+# ── Step 2: Boundary repair whole-archive sweep (belt-and-suspenders — ────
+# STEP 3/3 inside run_pipeline() already repaired each month step 1 just
+# processed; this catches anything left over by an older checkout).
 echo ""
-echo "STEP 2/3: repair_month_boundaries.py (whole output_dir)"
-python "${COSMO_SRC_DIR}/weather/tests/repair_month_boundaries.py" \
+echo "STEP 2/3: boundary_repair.py (whole output_dir)"
+python "${COSMO_SRC_DIR}/weather/providers/era5_land/boundary_repair.py" \
     2>&1 | tee -a "${LOG_FILE}"
 
 # ── Step 3: QA verification (read-only) ─────────────────────────────────────

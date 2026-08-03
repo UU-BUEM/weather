@@ -24,10 +24,12 @@ awkward (WSL/Cygwin) and would replace already-working code. Skip both.
 
 `scripts/run_era5_bulk.sh` wraps `test_era5_multi_year.py` with conda
 activation, `PYTHONPATH`, a timestamped log file, and automatically runs
-`repair_month_boundaries.py` (mandatory — fixes the first-hour GHI/sf
-boundary) then `verify_months.py` (QA) over the whole archive afterward
-(see that script's header; mirrored by `scripts/run_merra2_bulk.sh` /
-`docs/BULK_RUN_GUIDE_MERRA2.md` for MERRA-2, which needs no repair step):
+`providers/era5_land/boundary_repair.py` (belt-and-suspenders — boundary
+repair now also runs per-month automatically inside `run_pipeline()`
+itself, see CLAUDE.md NEXT MAJOR TASKS item 8) then `verify_months.py`
+(QA) over the whole archive afterward (see that script's header;
+mirrored by `scripts/run_merra2_bulk.sh` / `docs/BULK_RUN_GUIDE_MERRA2.md`
+for MERRA-2, which needs no repair step):
 
     tmux new -s era5
     conda activate weather_env
@@ -55,9 +57,10 @@ month finishes.
         > era5_bulk.log 2>&1 &
     tail -f era5_bulk.log
 
-This skips the wrapper's automatic repair/verify passes — run those
-manually afterward if you use this mode
-(`repair_month_boundaries.py` then `verify_months.py`).
+This skips the wrapper's whole-archive repair/verify passes — boundary
+repair still runs per-month automatically inside `run_pipeline()` itself,
+but run `providers/era5_land/boundary_repair.py` then `verify_months.py`
+manually afterward for a full-archive QA sweep if you use this mode.
 
 --------------------------------------------------------------------
 

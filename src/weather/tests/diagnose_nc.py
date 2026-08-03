@@ -127,7 +127,7 @@ def main() -> None:
             if v == "GHI" and mx > _MAX_PLAUSIBLE_GHI:
                 verdict = (
                     "UNREPAIRED — raw daily total, not an hourly flux. "
-                    "Run repair_month_boundaries.py!"
+                    "Run providers/era5_land/boundary_repair.py!"
                 )
             else:
                 verdict = "repaired / plausible"

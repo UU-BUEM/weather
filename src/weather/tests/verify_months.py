@@ -12,11 +12,13 @@ Checks, for every monthly file in a folder:
                       (unrepaired)?  Reports ``boundary_status``.
 5. **NaN profile**  — per-variable NaN fraction (ocean) and any land NaN.
 
-Run it BEFORE and AFTER repair_month_boundaries.py to see the difference.
+Run it BEFORE and AFTER providers/era5_land/boundary_repair.py (or a
+run_pipeline() call, which now runs it automatically) to see the
+difference.
 
 Usage::
 
-    python verify_months.py                               # uses ERA5 output_dir
+    python verify_months.py                    # uses ERA5 output_dir
     python verify_months.py D:/.../era5_land/output
     python verify_months.py <dir> --lat 69.0 --lon 25.0   # Arctic probe
 

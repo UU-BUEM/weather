@@ -80,7 +80,7 @@ def get_config() -> dict[str, Any]:
 
         # Retry a transient CDS failure rather than losing a month during
         # a multi-week unattended run.
-        "cds_max_retries": int(os.getenv("ERA5_CDS_MAX_RETRIES", "5")),
+        "cds_max_retries": EnvSettings.era5_cds_max_retries(),
 
         # Parallel HTTP range requests for the RESULT transfer.  This is
         # within one file — it does NOT add CDS requests, so it is safe
