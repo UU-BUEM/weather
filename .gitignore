@@ -31,6 +31,11 @@ data/
 *.part
 *_bulk_*.log
 
+# CI test fixtures (see fixtures/ci/README.md) -- real, small, intentionally
+# git-tracked subset of provider output for downstream consumers' CI (buem).
+# Exempted from the blanket *.nc ignore above.
+!fixtures/ci/**/*.nc
+
 # Environments / virtualenvs
 .venv/
 venv/
