@@ -195,7 +195,7 @@ def check_package_structure() -> bool:
         ("src/weather/providers/cosmo_rea6/__init__.py", "COSMO provider"),
         ("src/weather/providers/merra2/__init__.py", "MERRA-2 provider"),
         ("infrastructure/container/Dockerfile", "Dockerfile"),
-        ("docker-compose.yml", "Docker Compose"),
+        ("infrastructure/container/docker-compose.yml", "Docker Compose"),
         ("pyproject.toml", "Project metadata"),
         ("CHANGELOG.md", "Changelog"),
     ]
