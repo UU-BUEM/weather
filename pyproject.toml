@@ -61,6 +61,12 @@ solar = ["pvlib>=0.10"]
 parquet = ["pyarrow>=15.0"]
 era5 = ["cdsapi>=0.7"]
 excel = ["openpyxl>=3.1"]
+# `weather serve` -- thin point-query HTTP API (src/weather/api/), scaffold
+# only, see src/weather/api/README.md. Not required for any other entrypoint.
+# Needs `pointquery`+`solar` too (get_point_weather itself) and `parquet`
+# (response encoding) -- not repeated here since extras don't compose
+# automatically; install as `weather[api,pointquery,solar,parquet]`.
+api = ["flask>=3.0"]
 dev = [
     "mypy>=1.8",
     "pytest>=7.4",

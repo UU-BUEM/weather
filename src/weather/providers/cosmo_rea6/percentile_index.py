@@ -391,9 +391,17 @@ def _build_month_mosaic(args: tuple) -> str:
             var_attrs = {
                 v: dict(_ref_filt[v].attrs) for v in var_names
             }
-            # Materialise coords before the dataset closes
+            # Materialise coords before the dataset closes. Capture
+            # (dims, values) uniformly rather than bare values: for a
+            # 1-D dimension coordinate (time, y, x) xarray can infer
+            # the dim name from the coord's own name, but COSMO's
+            # latitude/longitude are 2-D non-dimension coordinates
+            # indexed by (y, x) -- xr.Dataset(coords={...}) cannot
+            # infer 2 dimension names from a bare 2-D array and raises
+            # "cannot set variable ... without explicit dimension
+            # names". Passing (dims, values) works for both cases.
             ref_coords = {
-                k: _ref_filt.coords[k].values
+                k: (_ref_filt.coords[k].dims, _ref_filt.coords[k].values)
                 for k in _ref_filt.coords
             }
             ref_attrs = dict(_ref_filt.attrs)

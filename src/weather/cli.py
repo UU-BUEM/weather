@@ -210,6 +210,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="List all recognised country names.",
     )
 
+    # ── serve ───────────────────────────────────────────────────────────────
+    serve_p = sub.add_parser(
+        "serve",
+        help="Run the point-query HTTP API (see src/weather/api/README.md).",
+    )
+    serve_p.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1).")
+    serve_p.add_argument("--port", type=int, default=8080, help="Bind port (default: 8080).")
+
     return parser
 
 
@@ -327,6 +335,22 @@ def _cmd_geo(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_serve(args: argparse.Namespace) -> None:
+    try:
+        from .api import create_app
+    except ImportError as exc:
+        raise SystemExit(
+            "The `api` extra is required: pip install weather[api]"
+        ) from exc
+
+    app = create_app()
+    print(
+        f"Weather point-query API on http://{args.host}:{args.port} "
+        "-- dev server only, use a real WSGI server (gunicorn) in production."
+    )
+    app.run(host=args.host, port=args.port)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -354,6 +378,8 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_run(args)
     elif args.command == "geo":
         sys.exit(_cmd_geo(args))
+    elif args.command == "serve":
+        _cmd_serve(args)
     else:
         parser.print_help()
         sys.exit(1)

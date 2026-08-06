@@ -406,9 +406,15 @@ def _build_month_mosaic(args: tuple) -> str:
             var_attrs = {
                 v: dict(_ref_filt[v].attrs) for v in var_names
             }
-            # Materialise coords before the dataset closes
+            # Materialise coords before the dataset closes. Capture
+            # (dims, values) uniformly rather than bare values -- see
+            # cosmo_rea6/percentile_index.py's identical fix: harmless
+            # here since MERRA-2's lat/lon are 1-D dimension
+            # coordinates, but xr.Dataset(coords={...}) cannot infer
+            # dimension names from a bare N-D array in general, so this
+            # is the correct form regardless of grid shape.
             ref_coords = {
-                k: _ref_filt.coords[k].values
+                k: (_ref_filt.coords[k].dims, _ref_filt.coords[k].values)
                 for k in _ref_filt.coords
             }
             ref_attrs = dict(_ref_filt.attrs)
