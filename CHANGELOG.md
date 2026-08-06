@@ -9,6 +9,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-08-06
+
+### Fixed
+
+- `validate.py`'s "Package Structure" check looked for `docker-compose.yml`
+  at the repo root; it lives at `infrastructure/container/docker-compose.yml`
+  (matching the `Dockerfile` entry in the same check list). Found while
+  running this repo's own release-workflow CI mirror.
+- `percentile_index.py` (all three providers) — `ref_coords` were captured
+  as bare coordinate values when materializing a reference dataset's
+  coords before building each month's mosaic. COSMO-REA6's 2-D
+  `latitude`/`longitude` (indexed by `(y, x)`, unlike ERA5-Land/MERRA-2's
+  1-D dimension coordinates) made `xr.Dataset(coords={...})` raise
+  `cannot set variable ... without explicit dimension names`. Fixed by
+  capturing `(dims, values)` uniformly for every coordinate — correct for
+  both the 2-D COSMO case and the 1-D ERA5-Land/MERRA-2 case (a no-op
+  there, applied for consistency). Verified against a full COSMO-REA6
+  percentile run against the real 1995-2019 archive (36 output files,
+  spot-checked across seasons/percentiles/both year-pool sizes) and the
+  existing MERRA-2 percentile output (1980-2025).
+
+### Added
+
+- `weather serve` — thin, opt-in HTTP point-query API (`src/weather/api/`,
+  new `api` extra requiring `flask>=3.0`). Exposes `GET /v1/weather/point`
+  (→ `get_point_weather()` as parquet) and `GET /v1/health` (per-provider
+  processed-year listing), with static API-key auth (`WEATHER_API_KEYS`)
+  and a per-key rate limiter. Verified against the real merra-2/cosmo-rea6
+  archives (health check, point queries incl. a partial year, 404/401
+  cases); a real gap found and fixed during that verification:
+  `point_query.py`'s `RuntimeError` (e.g. an unrepaired ERA5-Land boundary
+  month) fell through `app.py`'s exception handling to a generic 500 — now
+  returns a clear 503 with the underlying message. Scaffold status — not
+  wired into this repo's own CI, not deployed; see
+  `src/weather/api/README.md`.
+- `tests/inspect_cosmo_nc.py` — single-file COSMO-REA6 diagnostic
+  (attribute completeness, value profile, spot check), mirroring the
+  existing ERA5-Land `diagnose_nc.py`.
+- `tests/inspect_merra2_percentile.py` — spot-checks a MERRA-2 percentile
+  output file (attribute completeness, `source_year` diversity, GHI/T
+  value sanity).
+
+### Changed
+
+- `infrastructure/env/weather_env.yml`'s dependency list alphabetized;
+  also merged a duplicate `bottleneck` entry and dropped the
+  now-inapplicable "Optional but recommended" sub-heading.
+
 ## [1.7.0] - 2026-08-04
 
 ### Fixed
