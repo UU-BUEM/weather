@@ -9,6 +9,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-08-12
+
+### Added
+
+- `weather fetch` — unified CLI subcommand (`src/weather/unified_cli.py`)
+  consolidating the scattered per-provider scripts into one command across
+  all three providers: date-range selection (`--range
+  {single-month,single-year,multi-year}`), `--concatenate
+  {none,per-year,all}` (via `NetCDFMerger`), `--percentile` (via each
+  provider's existing `*PercentileIndexer`), and `--country`/`--bbox` area
+  scoping with ISO-3166-1-code-tagged output filenames. Reuses existing
+  `run_pipeline()`/`NetCDFMerger`/percentile-indexer/`weather.geo`
+  machinery — no duplicated business logic. Verified end-to-end against
+  real MERRA-2 data. Documented in `README.md` and the new
+  `docs/WEATHER_FETCH_GUIDE.md` (every flag, provider-compatibility
+  matrix, resume/tagging caveats).
+- `--country`/`--bbox` support for `cosmo-rea6` (previously era5-land/
+  merra-2 only). New `providers/cosmo_rea6/crop.py`: since DWD has no
+  server-side area-subsetting endpoint, the crop happens locally right
+  after decompress and before the expensive derived-field transform step
+  — `compute_crop_index()` decodes a bbox into a `(y, x)` index window
+  from real cfgrib-decoded WGS84 lat/lon (computed once per fetch, reused
+  across every attribute/month), `crop_datasets()` applies it. Verified
+  against real data twice: an isolated sandbox smoke test (Netherlands
+  crop narrowing to ~0.4% of the domain) and a real local pipeline run
+  producing correct output across all 13 derived variables.
+- `geo/bbox.py`'s `BBox.parse()` classmethod (`"N,W,S,E"` string parsing,
+  previously duplicated independently at 3 call sites) and
+  `geo/countries.py`'s `COUNTRY_CODES`/`get_country_code()` (ISO 3166-1
+  alpha-2 codes for output-filename tagging).
+
+### Changed
+
+- `common/merge.py`'s `NetCDFMerger` rewritten from hand-rolled h5py to
+  `xr.open_mfdataset`/`to_netcdf`, after real end-to-end testing (opening
+  a merged file with the standard toolchain, not just running the merge)
+  surfaced two serious bugs in the old implementation: missing HDF5
+  dimension-scale relationships (unreadable by netCDF4/xarray) and
+  silently wrong/overlapping timestamps (each source file's CF time units
+  are relative to that file's own start; the old merge copied raw values
+  under only the first file's units). Verified against real COSMO-scale
+  data (dimension scales present, correct year-boundary timestamps,
+  `get_point_weather` round-trip).
+- `NetCDFMerger`'s chunking fixed for real performance: real on-disk
+  chunk inspection showed COSMO's chunks are 3-D, not time-only, so the
+  original time-only chunk spec left every spatial dimension unchunked.
+  The chunk spec is now derived from each dataset's own real dimension
+  sizes (generic across providers' different spatial dimension names, not
+  hardcoded). Full-scale, unsliced, real-data measurement (2 real COSMO
+  months): 51.4 min → 35.5 min (-31%), with dask's worker threads capped
+  at 16 (scoped locally, not a global override) after confirming higher
+  counts gave no further measured speedup.
+
+### Fixed
+
+- `point_query.py`'s COSMO annual-file lookup checked for
+  `COSMO_REA6_<year>.nc`, but the only thing that actually produces an
+  annual file (`NetCDFMerger`) produces
+  `COSMO_REA6_<year>_annual_all_attrs.nc` — two incompatible naming
+  conventions for "the annual COSMO file" coexisted; fixed to match
+  `NetCDFMerger`'s established convention.
+- `weather run`'s CLI dispatch silently dropped `--months`/`--ncores` for
+  `cosmo-rea6`/`merra-2` even though both accept them.
+
 ## [1.8.0] - 2026-08-06
 
 ### Fixed
