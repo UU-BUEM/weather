@@ -168,6 +168,37 @@ Default provider can be set with:
 export WEATHER_PROVIDER=cosmo-rea6
 ```
 
+## Unified fetch CLI (`weather fetch`)
+
+One command across all three providers, covering fetch + concatenate +
+percentile in a single call — wraps existing `run_pipeline()`/`NetCDFMerger`/
+`*PercentileIndexer`/`weather.geo` machinery, no new business logic:
+
+```bash
+weather fetch --range single-month --year 2018 --month 3
+
+weather fetch --provider merra-2 --range single-year --year 2023 \
+    --country netherlands --concatenate all
+
+weather fetch --provider era5-land --range multi-year \
+    --from-year 2015 --to-year 2020 --concatenate per-year
+```
+
+Key flags: `--range {single-month,single-year,multi-year}` (required),
+`--concatenate {none,per-year,all}` (merges monthly output via
+`NetCDFMerger`), `--percentile` (runs the provider's percentile indexer over
+its whole archive), `--country NAME`/`--bbox N,W,S,E` (all three providers —
+real pre-download server-side area restriction for era5-land/merra-2, a
+local post-decompress crop for cosmo-rea6 since DWD has no server-side
+subsetting; ISO-code-tagged output filenames either way). Full flag
+reference, provider-compatibility matrix, and resume/tagging caveats:
+`docs/WEATHER_FETCH_GUIDE.md`.
+
+`weather fetch` is additive — it does not replace or modify
+`test_<provider>_{one_month,one_year,multi_year}.py` or the production
+bulk-run scripts (`scripts/run_era5_bulk.sh`/`scripts/run_merra2_bulk.sh`),
+which remain the recommended path for unattended whole-archive runs.
+
 ## Point-query API (for downstream consumers)
 
 For a downstream package (e.g. `buem`) that just needs hourly weather at

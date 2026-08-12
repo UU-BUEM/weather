@@ -3,9 +3,16 @@
 Orchestrates the full workflow, one or more months at a time:
 
     1. **Download** — fetch ``.grb.bz2`` files from DWD OpenData (bulk,
-       all requested months/attributes in parallel).
+       all requested months/attributes in parallel). Always whole-domain
+       -- DWD has no server-side area subsetting.
     2. **Decompress** — parallel bz2 decompression to raw GRIB (bulk).
-    3. **Transform + Export** — per month (bounded peak memory): read
+    3. **Crop** (opt-in, ``crop_bbox``) — if a bbox was given (e.g. a
+       country-scoped ``weather fetch``), crop every attribute to that
+       bbox's ``(y, x)`` index window right here, before transform, so
+       every derived-field formula below only runs over the requested
+       area instead of the whole domain. See :mod:`.crop`. Skipped
+       entirely when ``crop_bbox`` is ``None`` (the default).
+    4. **Transform + Export** — per month (bounded peak memory): read
        GRIB with xarray/cfgrib, convert units, compute derived fields
        (GHI, DHI, T, WS_10M, ALBEDO, SNOWFALL, T_DEW, DNI), write one
        compressed NetCDF-4 file.
@@ -32,6 +39,8 @@ Pipeline flow
       └── Phase 3 — Transform + Export, sequential per month (dask uses
             all allocated cores within each month):
               transform.build_month_dataset
+                  -> crop to crop_bbox's (y, x) window, if given (else
+                     skipped entirely -- see .crop)
                   -> GHI, DHI, T, WS_10M, ALBEDO, SNOWFALL, T_DEW, DNI
               export.to_netcdf -> output/COSMO_REA6_<YYYY>_<MM>_all_attrs.nc
               DNI outlier report (unless skip_dni)
@@ -57,6 +66,10 @@ import logging
 import os
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ...geo.bbox import BBox
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +91,7 @@ def run_pipeline(
     skip_dni: bool = False,
     resume: bool = False,
     cleanup: bool | None = None,
+    crop_bbox: BBox | None = None,
 ) -> list[Path]:
     """Execute the COSMO-REA6 pipeline for one or more months of *year*.
 
@@ -113,6 +127,13 @@ def run_pipeline(
         Remove downloaded/decompressed intermediates after a successful
         export. Default: ``config["cleanup"]`` (``COSMO_CLEANUP`` env
         var, itself defaulting to ``False`` -- keep everything).
+    crop_bbox : BBox, optional
+        If given, crop every month to this bbox's ``(y, x)`` index window
+        right after decompress, before transform (see
+        :mod:`.crop`) -- download/decompress themselves always fetch the
+        whole domain (DWD has no server-side area subsetting). Default
+        ``None``: no crop step runs at all, whole-domain output exactly
+        as before this parameter existed.
 
     Returns
     -------
@@ -157,6 +178,8 @@ def run_pipeline(
     logger.info("  Months:     %s", ", ".join(f"{m:02d}" for m in months))
     logger.info("  Attributes: %s", attributes)
     logger.info("  Work dir:   %s", cfg["work_dir"])
+    if crop_bbox is not None:
+        logger.info("  Crop bbox:  %s", crop_bbox)
     logger.info("=" * 60)
 
     def _out_path(month: int) -> Path:
@@ -250,6 +273,7 @@ def run_pipeline(
         try:
             ds_out, datasets = build_month_dataset(
                 year, month, compute_dni_field=not skip_dni,
+                crop_bbox=crop_bbox,
             )
             if not skip_dni:
                 log_dni_stats(ds_out["DNI"], datasets["SWDIRS_RAD"])

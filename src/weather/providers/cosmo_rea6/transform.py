@@ -55,6 +55,8 @@ from .downloaded_attributes import ATTRIBUTES, canonical_name, passthrough_attrs
 if TYPE_CHECKING:
     import xarray  # noqa: F401  # type: ignore[import-untyped]
 
+    from ...geo.bbox import BBox
+
 logger = logging.getLogger(__name__)
 
 
@@ -1208,6 +1210,7 @@ def build_month_dataset(
     *,
     grb_dir: Path | None = None,
     compute_dni_field: bool = True,
+    crop_bbox: BBox | None = None,
 ) -> tuple[xarray.Dataset, dict[str, xarray.Dataset]]:
     """Assemble one month's full COSMO-REA6 output dataset.
 
@@ -1233,6 +1236,12 @@ def build_month_dataset(
         If ``True`` (default), also compute the experimental per-cell
         DNI (see :func:`compute_dni`). Set ``False`` to skip it (e.g.
         ``--skip-dni``).
+    crop_bbox : BBox, optional
+        If given, crop every attribute to this bbox's ``(y, x)`` index
+        window (see :mod:`.crop`) immediately after opening, before any
+        derived-field computation -- default ``None`` means the crop
+        module is never imported or called at all (hard no-op, not just
+        a trivial pass-through).
 
     Returns
     -------
@@ -1249,6 +1258,14 @@ def build_month_dataset(
         attr: open_grib_month(attr, year, month, grb_dir=grb_dir)
         for attr in ATTRIBUTES
     }
+
+    if crop_bbox is not None:
+        from .crop import compute_crop_index, crop_datasets
+
+        y_slice, x_slice = compute_crop_index(
+            crop_bbox, datasets["SWDIRS_RAD"]
+        )
+        datasets = crop_datasets(datasets, y_slice, x_slice)
 
     # See build_annual_dataset for why this is captured before the
     # derived-variable strip below.

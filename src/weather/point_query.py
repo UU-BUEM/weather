@@ -286,7 +286,7 @@ def _get_point_cosmo_rea6(
     xr = _import_xarray()
     out_dir = _output_dir("cosmo-rea6", data_dir)
 
-    annual_path = out_dir / f"COSMO_REA6_{year}.nc"
+    annual_path = out_dir / f"COSMO_REA6_{year}_annual_all_attrs.nc"
     if annual_path.exists():
         datasets = [xr.open_dataset(str(annual_path))]
     else:
@@ -294,7 +294,7 @@ def _get_point_cosmo_rea6(
         if not paths:
             raise FileNotFoundError(
                 f"No processed cosmo-rea6 file for {year} under {out_dir} "
-                f"(looked for COSMO_REA6_{year}.nc or "
+                f"(looked for COSMO_REA6_{year}_annual_all_attrs.nc or "
                 f"COSMO_REA6_{year}_??_all_attrs.nc). Run the pipeline for "
                 f"{year} first (weather run --provider cosmo-rea6 --year "
                 f"{year})."
