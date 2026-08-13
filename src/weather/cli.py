@@ -262,6 +262,7 @@ def _cmd_info(args: argparse.Namespace) -> None:
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
+    from .providers.base import ADVISORY_PREFIX
     from .registry import get_default_provider, get_provider
 
     provider = (
@@ -270,12 +271,26 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         else get_default_provider()
     )
     issues = provider.validate_environment()
-    if issues:
+    advisories = [
+        i[len(ADVISORY_PREFIX):] for i in issues
+        if i.startswith(ADVISORY_PREFIX)
+    ]
+    critical = [i for i in issues if not i.startswith(ADVISORY_PREFIX)]
+
+    if advisories:
+        print(
+            "Weather pipeline environment advisories "
+            "(degraded, not broken):"
+        )
+        for issue in advisories:
+            print(f"  [i] {issue}")
+    if critical:
         print("Weather pipeline environment issues found:")
-        for issue in issues:
+        for issue in critical:
             print(f"  [!] {issue}")
         return 1
-    print("Weather pipeline environment OK — all checks passed.")
+    suffix = " (see advisories above)." if advisories else "."
+    print("Weather pipeline environment OK — all checks passed" + suffix)
     return 0
 
 

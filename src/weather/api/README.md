@@ -1,7 +1,7 @@
-# Point-query HTTP API (scaffold)
+# Point-query HTTP API
 
-**Status: scaffold, 2026-08-04. Not deployed, not wired into this repo's CI,
-not committed/pushed without review.**
+**Status: deployed on `sd26` as of 2026-08-13 (not wired into this repo's
+CI). See "Deployment (sd26)" below for the real, currently-running setup.**
 
 ## Why this exists
 
@@ -44,7 +44,7 @@ egress, per the production-access design discussion (see buem's CLAUDE.md,
 fine for the single-process dev server below, not for a multi-worker WSGI
 deployment (would need a shared store, e.g. redis, at that point).
 
-## Running it
+## Running it locally
 
 ```bash
 pip install -e ".[api,pointquery,solar,parquet]"
@@ -57,18 +57,67 @@ for production (no concurrency, no TLS). A real deployment should run this
 app under gunicorn/similar, same as buem's own `infrastructure/container/`
 does for its API.
 
+## Deployment (`sd26`)
+
+Running via `scripts/launch_weather_serve.sh` (repo root), bound to
+`0.0.0.0:8091`, pointed at the real `/data/soma` archives:
+
+```bash
+ssh sd26
+cd ~/weather
+
+# Check it's running
+ps -p "$(cat logs/weather_serve.pid)" 2>/dev/null && echo running
+
+# Stop it
+kill "$(cat logs/weather_serve.pid)"
+
+# Start/restart (reads WEATHER_API_KEYS from .env -- see that script's
+# header for how to generate one; refuses to start if .env has none, and
+# refuses to double-start if the PID file shows an already-running process)
+bash scripts/launch_weather_serve.sh
+```
+
+PID and log files live under `logs/` (gitignored, not `/tmp` — survives a
+`/tmp` cleanup, though not a full server reboot without re-running the
+script).
+
+**Firewall**: port 8091 is not reachable directly from outside `sd26`, even
+over the university VPN (confirmed: TCP connect times out) — only SSH
+(port 22) is open. Every caller, including a developer's own machine,
+currently needs an SSH tunnel:
+
+```bash
+ssh -N -L 8091:localhost:8091 sd26
+```
+
+Each client environment needs its own tunnel (Windows, WSL2, etc. don't
+share a loopback interface) — see the main repo README's troubleshooting
+history for this if a tunnel silently isn't forwarding. A real production
+deployment (e.g. buem's own hosting) would need either a firewall rule
+opening 8091 for its specific egress IP, or a reverse proxy on a port
+that's already open — an infrastructure decision, not resolved here.
+
 ## buem-side integration
 
 `buem`'s `weather_cache.py::get_or_fetch_weather()` has a matching remote
-branch, gated by `WEATHER_API_URL`/`WEATHER_API_KEY` — see that repo's own
-scaffold changes. Unset (the default), buem's behavior is entirely
-unchanged (local `data_dir`/archive path, exactly as today).
+branch, gated by `WEATHER_API_URL`/`WEATHER_API_KEY`. Unset (the default),
+buem's behavior is entirely unchanged (local `data_dir`/archive path,
+exactly as before this API existed). Verified end-to-end (2026-08-13):
+`get_or_fetch_weather()` unmodified, through the SSH tunnel above, against
+two independent (location, year) pairs guaranteed not already
+locally-cached — both returned correct 8760-hour years with physically
+sane values.
 
-## Still open before this can be real (not decided here)
+## Still open (not decided here)
 
-- Where this actually runs relative to the data host (on `sd26` itself vs.
-  a small gateway host) and how buem's production egress reaches it —
-  needs the IT conversation flagged in buem's CLAUDE.md, not a code change.
-- `cosmo-rea6`/`era5-land` health/point-query support is already wired
-  (same `get_point_weather` call, provider-agnostic) but untested against
-  real archives for those two providers as of this scaffold.
+- Verified so far: `/v1/health` returns correct real data for all three
+  providers; `/v1/weather/point` verified for `merra-2` only (two real
+  fetches via buem, see above). `cosmo-rea6`/`era5-land` point-query is
+  wired identically (same provider-agnostic `get_point_weather` call) but
+  not yet exercised against their real archives through this API
+  specifically.
+- Whether buem's actual production deployment (as opposed to a
+  developer's tunneled machine) can reach this at all depends on the
+  firewall question above — needs the IT conversation flagged in buem's
+  CLAUDE.md, not a code change.

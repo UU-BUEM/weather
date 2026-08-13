@@ -236,6 +236,10 @@ output on `cdo`-side cropping; see `CLAUDE.md` for the current status.
 - Slurm container run: `scripts/run_pipeline_container.sh`
 - Build container image: `scripts/build_container.sh`
 - Create/update conda env: `scripts/setup_env.sh`
+- Launch the point-query HTTP API: `scripts/launch_weather_serve.sh`
+  (detached, PID/log files under `logs/`; reads `WEATHER_API_KEYS` from
+  `.env` — never hardcode a key in the script itself, it's committed to
+  the repo. See `src/weather/api/README.md` for the full deploy runbook.)
 
 Default server paths used by scripts:
 

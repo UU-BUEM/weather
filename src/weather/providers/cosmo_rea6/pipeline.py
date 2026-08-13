@@ -64,9 +64,12 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from ..base import ADVISORY_PREFIX
 
 if TYPE_CHECKING:
     from ...geo.bbox import BBox
@@ -360,7 +363,10 @@ def validate_environment() -> list[str]:
     Returns
     -------
     list[str]
-        List of issues found (empty = all OK).
+        List of issues found (empty = all OK). Advisory issues (degraded
+        performance, still fully functional) are prefixed with
+        `providers.base.ADVISORY_PREFIX`; everything else is a hard
+        blocker.
     """
     issues: list[str] = []
 
@@ -374,16 +380,22 @@ def validate_environment() -> list[str]:
                 f"Install with: conda install conda-forge::{pkg}"
             )
 
-    # External decompressors (optional but recommended)
-    import shutil
+    # External decompressors -- ADVISORY, not critical: decompress.py
+    # already falls back to Python's stdlib bz2 module when neither
+    # binary is found (see _detect_decompressor), just slower. Also has
+    # no win-64 conda-forge build (same gap as `cdo`, see weather_env.yml's
+    # comment next to both) -- expected to be permanently absent on a
+    # Windows dev machine, not a misconfiguration to fix there.
     for cmd in ("pbzip2", "lbzip2"):
         if shutil.which(cmd):
             break
     else:
         issues.append(
-            "No parallel decompressor found (pbzip2 or lbzip2).  "
-            "The Python bz2 fallback is much slower.  "
-            "Install with: conda install conda-forge::pbzip2"
+            ADVISORY_PREFIX + "No parallel decompressor found (pbzip2 or "
+            "lbzip2) -- falling back to the slower Python bz2 module. "
+            "Expected on Windows (no win-64 conda-forge build for "
+            "either); on Linux, install with: "
+            "conda install conda-forge::pbzip2"
         )
 
     # Config sanity
@@ -416,7 +428,6 @@ def _validate_paths(cfg: dict) -> list[str]:
         List of path validation issues (empty = all OK).
     """
     issues: list[str] = []
-    import os
 
     # Check work directory
     work_dir = cfg["work_dir"]

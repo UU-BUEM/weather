@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -100,7 +101,6 @@ def export_netcdf(
     # Compute one variable at a time to limit peak memory usage —
     # loading all variables simultaneously would require ~12 GiB,
     # but sequential computation peaks at ~4 GiB per variable.
-    import time
     t0 = time.perf_counter()
     logger.info("Computing dask arrays into memory (variable-by-variable)...")
     for var_name in list(ds.data_vars):
