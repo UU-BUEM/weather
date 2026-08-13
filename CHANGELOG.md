@@ -9,6 +9,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-08-13
+
+### Added
+
+- `scripts/launch_weather_serve.sh` — standardized launcher for `weather
+  serve` (previously a local-only scaffold, now actually deployed):
+  reads `WEATHER_API_KEYS` from `.env` (never hardcoded in the
+  committed script itself), PID/log files under `logs/` (newly
+  gitignored) rather than `/tmp`, which isn't guaranteed to survive a
+  reboot/cleanup. `src/weather/api/README.md` rewritten with the real
+  deployment runbook (check/stop/restart, the firewall/tunnel caveat
+  for reaching a port behind a VPN-protected host, what's verified end
+  to end vs. not yet).
+
+### Changed
+
+- `weather validate`'s severity handling: the missing `pbzip2`/`lbzip2`
+  binary (no win-64 conda-forge build, same gap as `cdo`) was treated
+  with the same severity as a genuinely broken environment, failing the
+  CLI's exit code for something its own comment already called
+  "optional but recommended." New `providers.base.ADVISORY_PREFIX`
+  string-prefix convention — `weather validate` now reports this class
+  of issue as a non-fatal advisory instead, matching how `cdo`'s
+  identical gap already degrades gracefully elsewhere
+  (`test_geo_countries.py`'s `pytest.mark.skipif`). `weather_env.yml`
+  gained matching explanatory comments next to both `cdo` and `lbzip2`.
+- `pyproject.toml`'s `merge` extra now lists `xarray`/`dask`/`netcdf4`
+  (what `common/merge.py` actually imports since its v1.9.0 rewrite)
+  instead of `h5py`, which had become a fully dead dependency (verified
+  via a repo-wide import search) — removed from `weather_env.yml` too.
+
+### Fixed
+
+- `validate.py` (root-level local CI mirror script): `run_cmd()`'s
+  hardcoded 60s timeout was never actually enough for a cold `docker
+  build` (base image pull + full conda env solve/install) despite the
+  script's own comment promising "2-3 minutes" — now configurable per
+  call, with the Docker build step given 900s. Also fixed the "Docker
+  CLI" smoke-test call itself: `weather:test` is a deps-only image
+  (source is bind-mounted at `/app/src` at runtime, matching the
+  Dockerfile's own documented usage) and its entrypoint already runs
+  `python -m weather` internally — the old call was missing the
+  bind-mount (`No module named weather`) and duplicating `python -m
+  weather` on top of the entrypoint's own invocation.
+- `audit_imports.py` (the local-import-scope auditor) had two real
+  false-positive gaps, found by running it repo-wide for the first time
+  this session: it only recognized plain `import`/`from` statements as
+  binding a watched name in scope, missing two already-used, genuinely
+  valid patterns — `xr = pytest.importorskip("xarray")` and
+  `xr = _import_xarray()` (a lazy-import helper). Generalized the
+  scope-detection rule to any single-target assignment binding a
+  watched name. Now clean across the whole `src/weather/` tree.
+- `export.py`/`pipeline.py`: a couple of genuinely redundant local
+  imports (`time`, a duplicate `os`) hoisted to module level — not a
+  broader sweep, since most of `pipeline.py`'s other local imports are
+  deliberate lazy-loading to keep `weather info`/`weather validate`
+  from paying the heavy cfgrib/xarray/dask import cost.
+
 ## [1.9.0] - 2026-08-12
 
 ### Added
