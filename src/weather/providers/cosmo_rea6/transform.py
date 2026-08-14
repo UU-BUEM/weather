@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from ...common.cf_conventions import attach_cf_latlon_attrs
 from ...common.derived_attributes import (
     DNI_ELEVATION_THRESHOLD_DEG,
     dewpoint_from_rh,
@@ -1158,6 +1159,7 @@ def build_annual_dataset(
             latitude=(("y", "x"), lat_2d),
             longitude=(("y", "x"), lon_2d),
         )
+        attach_cf_latlon_attrs(out)
 
     if include_wind_components:
         u_raw = _strip_scalar_coords(_resolve_var(ds_u, "u10"))
@@ -1329,6 +1331,7 @@ def build_month_dataset(
             latitude=(("y", "x"), lat_2d),
             longitude=(("y", "x"), lon_2d),
         )
+        attach_cf_latlon_attrs(ds_out)
     logger.info(
         "Month dataset assembled: %d variables, %d timesteps",
         len(ds_out.data_vars), ds_out.sizes.get("time", 0),

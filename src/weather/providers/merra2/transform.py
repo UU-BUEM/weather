@@ -58,6 +58,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from ...common.cf_conventions import attach_cf_latlon_attrs
 from ...common.derived_attributes import apply_derived_fields, bolton_rh, wind_speed
 from ...common.solar_position import spencer_zenith
 
@@ -331,6 +332,7 @@ def build_monthly_dataset(
             latitude=("y", lat_vals),
             longitude=("x", lon_vals),
         )
+        attach_cf_latlon_attrs(ds)
         ds = ds.assign_coords(
             y=("y", np.arange(ds.sizes["y"])),
             x=("x", np.arange(ds.sizes["x"])),

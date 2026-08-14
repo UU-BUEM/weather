@@ -20,6 +20,8 @@ All files are Markdown; linting rules are in `/.markdownlint.json`
 | [BULK_RUN_GUIDE_ERA5-LAND.md](BULK_RUN_GUIDE_ERA5-LAND.md) | ERA5-Land bulk multi-year run: bottleneck analysis, `scripts/run_era5_bulk.sh`, parallelization, disk budget |
 | [BULK_RUN_GUIDE_MERRA2.md](BULK_RUN_GUIDE_MERRA2.md) | MERRA-2 bulk multi-year run: bottleneck analysis, `scripts/run_merra2_bulk.sh`, parallelization, disk budget |
 | [DOWNLOAD_AND_LOGGING.md](DOWNLOAD_AND_LOGGING.md) | ERA5-Land: parallel-range-request download speedup, server logging setup |
+| [WEATHER_GEO_GUIDE.md](WEATHER_GEO_GUIDE.md) | `weather geo {list,crop}` — post-hoc country-bbox cropping of an already-exported NetCDF, any provider |
+| [cdo_crop_cf_metadata.md](cdo_crop_cf_metadata.md) | `weather geo crop`/CDO grid-detection bug: root cause (missing CF `standard_name`/`units` on `latitude`/`longitude`), the fix, and the retroactive archive patch |
 | [git-push-workflow.md](git-push-workflow.md) | Branch and push conventions for contributors |
 
 ---

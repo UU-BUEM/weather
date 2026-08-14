@@ -225,9 +225,11 @@ weather geo crop --input ERA5_LAND_2018_all_attrs.nc \
     --output ERA5_LAND_2018_netherlands.nc --country netherlands
 ```
 
-Crops an already-exported ERA5-Land/MERRA-2 NetCDF to a country's
-bounding box via `cdo sellonlatbox`. Not yet supported for COSMO-REA6
-output on `cdo`-side cropping; see `CLAUDE.md` for the current status.
+Crops an already-exported NetCDF (any provider — ERA5-Land, MERRA-2, or
+COSMO-REA6) to a country's bounding box via `cdo sellonlatbox`. Needs the
+`cdo` binary (no win-64 build, so not usable on Windows). Files exported
+before 2026-08-14 need a one-time retroactive metadata patch first — see
+`docs/WEATHER_GEO_GUIDE.md` and `docs/cdo_crop_cf_metadata.md`.
 
 ## Shell Script Paths
 

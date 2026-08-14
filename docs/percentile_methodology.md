@@ -3,9 +3,12 @@
 ## 1. Overview
 
 For each of the 824 × 848 spatial cells, this algorithm identifies
-which calendar year from the 1995–2018 COSMO-REA6 archive best
-represents the 10th-percentile (P10), median (P50), and
-90th-percentile (P90) of the long-term solar radiation climate.
+which calendar year from the COSMO-REA6 archive best represents the
+10th-percentile (P10), median (P50), and 90th-percentile (P90) of the
+long-term solar radiation climate. The algorithm works over whatever
+years are actually present — the real production run used the full
+1995–2019 archive (298 monthly files, not a clean 24-year boundary;
+DWD's real coverage stops partway through 2019).
 
 The ranking metric is GHI (Global Horizontal Irradiance), the primary
 solar energy resource variable.  Once the representative year is
@@ -30,8 +33,8 @@ by cumulative monthly global radiation.
 
 | Input | Shape | Description |
 | --- | --- | --- |
-| Monthly NetCDF files | 12 per year × 24 years = 288 | `COSMO_REA6_YYYY_MM_all_attrs.nc` |
-| Analysis period | 1995–2018 | 24 years |
+| Monthly NetCDF files | real production run: 298 | `COSMO_REA6_YYYY_MM_all_attrs.nc` |
+| Analysis period | 1995–2019 | ~24.8 years (real archive; see note above) |
 | Spatial grid | 824 × 848 | COSMO-REA6 rotated-pole |
 | Ranking metric | daily GHI sum | Summed per calendar day, per cell |
 

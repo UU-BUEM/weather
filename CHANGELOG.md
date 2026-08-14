@@ -9,6 +9,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.2] - 2026-08-14
+
+### Fixed
+
+- `weather geo crop` (`cdo sellonlatbox`) was silently broken against
+  every provider's real exported output, confirmed via real `cdo` runs
+  (not assumed): each provider's `transform.py` builds `latitude`/
+  `longitude` via `assign_coords()`, which creates a fresh coordinate
+  with no attributes, discarding CF `standard_name`/`units`. Without
+  them, CDO can't identify the coordinates, falls back to
+  `gridtype = generic`, and `sellonlatbox` aborts (`Unsupported grid
+  type: generic` / `No processable variable found!`). Fixed via a new
+  shared `common/cf_conventions.attach_cf_latlon_attrs()`, called from
+  all three providers' `transform.py` — new exports get it
+  automatically. Verified against real files both before (hard abort)
+  and after (correct cropped output) the fix, for COSMO's 2-D
+  curvilinear grid and MERRA-2's 1-D grid. Full investigation:
+  `docs/cdo_crop_cf_metadata.md`.
+- Retroactively patched the already-exported COSMO-REA6 (298 files) and
+  MERRA-2 (552 files) archives with the same fix — metadata-only (no
+  data recomputed), idempotent, verified with a real `cdo sellonlatbox`
+  run against an unmodified archive file for each provider afterward.
+  ERA5-Land's archive intentionally left untouched (its own bulk
+  pipeline run was active at the time); needs the same pass once that
+  run finishes.
+- `README.md`'s "Country cropping" section and `weather geo crop --input`'s
+  own `--help` text both still said COSMO-REA6 wasn't supported; corrected.
+- `docs/debugging.md`: removed an entirely obsolete `h5py`
+  troubleshooting entry (h5py was removed as a dependency in 1.9.0's
+  `NetCDFMerger` rewrite) and corrected a section that recommended the
+  *old* h5py-based `NetCDFMerger` as a workaround for an
+  `xr.open_mfdataset` GPFS/NFS bug — `NetCDFMerger` now uses
+  `xr.open_mfdataset` internally, so that workaround no longer applies
+  as written.
+- `docs/qa.md`'s disk-space guidance was significantly understated
+  (predated several sessions' worth of added output variables): real
+  measured monthly/annual output sizes (~9.3 GB/month, ~112 GB/year) are
+  roughly double and 25x the old ~4.5 GB estimates respectively, making
+  total archive storage ~5.4+ TB, not the previously-stated ~230 GB.
+  Also corrected the archive's real year range (1995–2019, 298 files,
+  not a clean 1995–2018/24-year boundary) here and in
+  `docs/percentile_methodology.md`.
+
+### Added
+
+- `docs/WEATHER_GEO_GUIDE.md` — full `weather geo {list,crop}` usage
+  guide (flags, provider support matrix, the `cdo` requirement and its
+  Windows limitation), cross-referenced from `docs/WEATHER_FETCH_GUIDE.md`
+  and `docs/README.md`'s index.
+
 ## [1.9.1] - 2026-08-13
 
 ### Added

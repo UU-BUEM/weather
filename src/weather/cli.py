@@ -193,7 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--input",
         required=True,
         metavar="PATH",
-        help="Input NetCDF file (ERA5-Land / MERRA-2 output).",
+        help="Input NetCDF file (any provider's output).",
     )
     geo_crop_p.add_argument(
         "--output",

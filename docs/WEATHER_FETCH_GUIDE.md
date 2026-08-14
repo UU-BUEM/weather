@@ -310,5 +310,7 @@ silent no-op.
   substitute for these).
 - `src/weather/common/merge.py` — the concatenation implementation
   `--concatenate` calls.
+- `docs/WEATHER_GEO_GUIDE.md` — the standalone `weather geo crop` tool's own
+  full guide (flags, provider support, requires `cdo`).
 - `src/weather/geo/` — the country/bbox lookup and standalone `weather geo crop`
   tool.

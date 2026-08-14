@@ -57,6 +57,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from ...common.cf_conventions import attach_cf_latlon_attrs
 from ...common.derived_attributes import magnus_rh, mask_night, wind_speed
 from ...common.solar_position import spencer_zenith
 from .downloaded_attributes import ATTRIBUTES
@@ -828,6 +829,7 @@ def build_monthly_dataset(
             latitude=("y", lat_vals),
             longitude=("x", lon_vals),
         )
+        attach_cf_latlon_attrs(ds)
         # Replace the bare index coords y/x with simple integer indices
         # (optional, keeps them lightweight; comment out to keep floats).
         ds = ds.assign_coords(
