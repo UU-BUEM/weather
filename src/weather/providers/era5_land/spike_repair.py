@@ -430,10 +430,13 @@ def repair_spikes(
         if records:
             fixed[nc_path.name] = records
             for rec in records:
+                target = rec["to"]
                 logger.info(
-                    "%s %s %s (y=%d,x=%d): %.1f -> %.3f W/m^2",
+                    "%s %s %s (y=%d,x=%d): %.1f -> %s",
                     nc_path.name, rec["var"], rec["time"],
-                    rec["y"], rec["x"], rec["from"], rec["to"],
+                    rec["y"], rec["x"], rec["from"],
+                    "NaN (absent upstream)" if target is None
+                    else f"{target:.3f} W/m^2",
                 )
 
     logger.info(
