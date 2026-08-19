@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 
 from weather.providers.era5_land.percentile_index import (
+    NO_SOURCE_YEAR,
     Era5LandPercentileIndexer,
     _month_hour_offset,
 )
@@ -138,6 +139,31 @@ def test_short_first_year_does_not_undersize_the_mosaic():
         mosaic[offset:offset + length, rows, cols] = data[:length, rows, cols]
 
     assert not np.isnan(mosaic).any()
+
+
+def test_cells_without_source_data_are_flagged_not_awarded():
+    """Masked cells must not silently be credited to the first year.
+
+    ERA5-Land's static land-sea mask leaves ~49% of the grid NaN in
+    every hour of every year. Those cells previously summed to 0.0 for
+    every candidate year, tying exactly, so ``argmin`` handed all of
+    them to whichever year sorted first.
+    """
+    reg = _registry(np.linspace(1000.0, 4000.0, 25), seed=3)
+    # Mask the top row in every year, mimicking an ocean band.
+    for arr in reg[1].values():
+        arr[:, 0, :] = np.nan
+
+    maps = _indexer()._compute_ks_for_month(1, reg)
+
+    for pct in ("P10", "P50", "P90"):
+        sel = maps[f"{pct}_01"]
+        assert (sel[0, :] == NO_SOURCE_YEAR).all(), (
+            f"{pct}: masked row not flagged, got {sel[0, :]}"
+        )
+        assert (sel[1:, :] != NO_SOURCE_YEAR).all(), (
+            f"{pct}: valid cells wrongly flagged"
+        )
 
 
 def test_all_providers_share_one_selection_block():

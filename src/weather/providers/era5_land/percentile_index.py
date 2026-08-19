@@ -73,6 +73,14 @@ logger = logging.getLogger(__name__)
 _FILENAME_RE = re.compile(r"ERA5_LAND_(\d{4})_(\d{2})_")
 
 
+#: Written into ``source_year`` for cells that have no source data in
+#: at least one year -- e.g. every ocean cell under ERA5-Land's static
+#: land-sea mask, which is ~49% of that grid. Such cells are identical
+#: in every candidate year, so any "winner" would be an artefact of
+#: sort order rather than a real selection.
+NO_SOURCE_YEAR = -1
+
+
 def _month_hour_offset(times) -> int:
     """Hours from the start of the calendar month to ``times[0]``.
 
@@ -134,8 +142,14 @@ def _preprocess_single_file(file_path: str) -> dict:
             )
             ghi = ds["GHI"].isel(time=~leap_mask).load()
 
+        # min_count=1 keeps a day NaN when every hour of it is NaN.
+        # Without it a masked cell (ERA5-Land's ocean is NaN at every
+        # hour of every year) sums to 0.0 and becomes indistinguishable
+        # from a real polar-night day that genuinely received no sun.
         daily_sum = (
-            ghi.resample(time="1D").sum(dim="time").values
+            ghi.resample(time="1D")
+            .sum(dim="time", min_count=1)
+            .values
         )
         return {
             "path": file_path,
@@ -283,6 +297,7 @@ def _build_month_mosaic(args: tuple) -> str:
         for key in (f"{pct}_{month_str}",)
         if key in spatial_index_maps
         for y in np.unique(spatial_index_maps[key])
+        if int(y) != NO_SOURCE_YEAR
     })
     if not sorted_years:
         return f"Month {month_str}: skipped (no spatial maps)"
@@ -293,7 +308,12 @@ def _build_month_mosaic(args: tuple) -> str:
 
     # Per-percentile (R, L) arrays: local year index that wins each cell
     pct_y_idx: dict[str, np.ndarray] = {
-        pct: np.vectorize(year_to_idx.__getitem__)(
+        # -1 for the no-source sentinel: it matches no real year
+        # index below, so those cells are simply never written and stay
+        # NaN in the mosaic.
+        pct: np.vectorize(
+            lambda _v: year_to_idx.get(int(_v), -1)
+        )(
             spatial_index_maps[f"{pct}_{month_str}"]
         ).astype(np.intp)
         for pct in ("P10", "P50", "P90")
@@ -496,7 +516,13 @@ def _build_month_mosaic(args: tuple) -> str:
             out_ds["source_year"] = (
                 ["y", "x"],
                 spatial_index_maps[map_key].astype(np.int32),
-                {"description": "Source year for this percentile"},
+                {
+                    "description": (
+                        "Source year for this percentile; "
+                        f"{NO_SOURCE_YEAR} where the cell has no "
+                        "source data in at least one year"
+                    )
+                },
             )
             enc = {
                 vn: {
@@ -805,6 +831,11 @@ class Era5LandPercentileIndexer:
                 np.abs(year_total - _target[None]), axis=0
             ).astype(np.int32)
 
+        # A cell missing data in ANY year cannot be ranked: its totals
+        # are identical (or NaN) across the board, so argmin would hand
+        # it to whichever year sorts first. Flag it instead.
+        valid_cell = np.isfinite(year_total).all(axis=0)
+
         best_p10 = best[0.10]
         best_p50 = best[0.50]
         best_p90 = best[0.90]
@@ -812,19 +843,26 @@ class Era5LandPercentileIndexer:
 
         year_arr = np.array(available_years, dtype=np.int32)
         tag = f"{month:02d}"
+
+        selections: dict[str, np.ndarray] = {}
+        for _name, _best in (
+            ("P10", best_p10), ("P50", best_p50), ("P90", best_p90)
+        ):
+            _sel = year_arr[_best]
+            _sel[~valid_cell] = NO_SOURCE_YEAR
+            selections[f"{_name}_{tag}"] = _sel
+
         logger.info(
-            "Month %s KS done (P10 %d unique years, "
-            "P50 %d, P90 %d)",
+            "Month %s selection done (%d cell(s) without source data; "
+            "unique years P10 %d, P50 %d, P90 %d)",
             tag,
-            len(np.unique(best_p10)),
-            len(np.unique(best_p50)),
-            len(np.unique(best_p90)),
+            int((~valid_cell).sum()),
+            *(
+                len(np.unique(selections[f"{_p}_{tag}"][valid_cell]))
+                for _p in ("P10", "P50", "P90")
+            ),
         )
-        return {
-            f"P10_{tag}": year_arr[best_p10],
-            f"P50_{tag}": year_arr[best_p50],
-            f"P90_{tag}": year_arr[best_p90],
-        }
+        return selections
 
     # ------------------------------------------------------------------
     # Phase 3: mosaic assembly
