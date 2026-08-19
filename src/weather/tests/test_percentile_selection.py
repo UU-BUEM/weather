@@ -166,6 +166,27 @@ def test_cells_without_source_data_are_flagged_not_awarded():
         )
 
 
+def test_one_bad_year_does_not_wipe_the_whole_month():
+    """A single unusable year must not disqualify every cell.
+
+    Real regression: COSMO-REA6's leap Februaries carried an all-NaN
+    trailing day, and requiring every year to be finite flagged all
+    698,752 cells, so the mosaic skipped months 02, 05 and 12 entirely.
+    """
+    reg = _registry(np.linspace(1000.0, 4000.0, 20), seed=4)
+    bad = FIRST_YEAR + 7
+    reg[1][bad][:] = np.nan
+
+    maps = _indexer()._compute_ks_for_month(1, reg)
+
+    for pct in ("P10", "P50", "P90"):
+        sel = maps[f"{pct}_01"]
+        assert (sel != NO_SOURCE_YEAR).all(), (
+            f"{pct}: cells flagged despite {len(reg[1]) - 1} usable years"
+        )
+        assert (sel != bad).all(), f"{pct}: the all-NaN year was selected"
+
+
 def test_all_providers_share_one_selection_block():
     """Guard against the fix drifting apart across the three copies."""
     root = pathlib.Path(__file__).resolve().parents[1] / "providers"

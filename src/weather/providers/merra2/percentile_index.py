@@ -46,6 +46,7 @@ import os
 import re
 import shutil
 import tempfile
+import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import (
@@ -142,7 +143,16 @@ def _preprocess_single_file(file_path: str) -> dict:
             leap_mask = (
                 (ds.time.dt.month == 2) & (ds.time.dt.day == 29)
             )
-            ghi = ds["GHI"].isel(time=~leap_mask).load()
+            # Keep only stamps belonging to this file's OWN calendar
+            # month. COSMO-REA6's monthly exports carry a trailing
+            # stamp from the next month, which resampled a 28-day
+            # February into 29 daily bins (30 in leap years, the last
+            # all-NaN). That both adds a spurious partial day to the
+            # year's total and leaves years with differing bin counts
+            # incomparable. No-op for ERA5-Land and MERRA-2, whose
+            # exports already stop at the month boundary.
+            in_month = ds.time.dt.month == month
+            ghi = ds["GHI"].isel(time=in_month & ~leap_mask).load()
 
         # min_count=1 keeps a day NaN when every hour of it is NaN.
         # Without it a masked cell (ERA5-Land's ocean is NaN at every
@@ -823,22 +833,33 @@ class Merra2PercentileIndexer:
         # np.quantile interpolates between the two bracketing years;
         # argmin then snaps to whichever real year sits nearest, so the
         # chosen year's brightness rank comes out at ~= q.
-        best: dict[float, np.ndarray] = {}
-        for _q in (0.10, 0.50, 0.90):
-            _target = np.quantile(year_total, _q, axis=0)
-            best[_q] = np.argmin(
-                np.abs(year_total - _target[None]), axis=0
-            ).astype(np.int32)
+        # A year with no data at a cell must not compete for it, but it
+        # must not disqualify the cell either: one bad year previously
+        # invalidated every cell of the month.
+        finite = np.isfinite(year_total)
 
-        # A cell missing data in ANY year cannot be ranked: its totals
-        # are identical (or NaN) across the board, so argmin would hand
-        # it to whichever year sorts first. Flag it instead.
-        valid_cell = np.isfinite(year_total).all(axis=0)
+        best: dict[float, np.ndarray] = {}
+        with warnings.catch_warnings():
+            # All-NaN cells are expected (ocean); they are flagged
+            # below rather than ranked.
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            for _q in (0.10, 0.50, 0.90):
+                _target = np.nanquantile(year_total, _q, axis=0)
+                _dist = np.where(
+                    finite, np.abs(year_total - _target[None]), np.inf
+                )
+                best[_q] = np.argmin(_dist, axis=0).astype(np.int32)
+                del _target, _dist
+
+        # Flag only cells no year can speak for at all -- e.g. ocean
+        # under ERA5-Land's static land-sea mask. Ranking those would
+        # just hand them to whichever year sorts first.
+        valid_cell = finite.any(axis=0)
 
         best_p10 = best[0.10]
         best_p50 = best[0.50]
         best_p90 = best[0.90]
-        del year_total, best
+        del year_total, best, finite
 
         year_arr = np.array(available_years, dtype=np.int32)
         tag = f"{month:02d}"
