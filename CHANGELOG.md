@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- COSMO-REA6's monthly exports carry a trailing stamp from the **next**
+  month, so a 28-day February resampled to 29 daily bins — 30 in leap
+  years, the last entirely NaN. Verified across the real archive: all
+  296 monthly files are affected, every month one day too long. That
+  added a spurious partial day to each year's monthly GHI total and
+  left years with differing bin counts not comparable. Daily sums are
+  now restricted to stamps belonging to the file's own calendar month.
+  Confirmed a no-op for the other two providers — 0 of ERA5-Land's 912
+  and 0 of MERRA-2's 552 files carry an out-of-month stamp — so their
+  percentile output is unaffected and was not regenerated.
+- A cell was invalidated when **any** year lacked data there. Once
+  COSMO's leap Februaries contributed an all-NaN day, that flagged all
+  698,752 cells and the mosaic skipped months 02, 05 and 12 outright
+  ("skipped (no spatial maps)"). A cell is now flagged only when *no*
+  year can speak for it, and years without data at a cell are excluded
+  from that cell's ranking instead of disqualifying the cell.
+
 - **Percentile representative-year selection did not produce the
   documented P-levels, in all three providers.** The selection minimised
   `|fraction of a year's days at or below the pooled P-threshold - q|`.
