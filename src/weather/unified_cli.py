@@ -26,6 +26,7 @@ purely additive.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import os
 from pathlib import Path
@@ -65,6 +66,16 @@ _FILE_PREFIX = {
 _AREA_ENV_VAR = {
     "era5-land": "ERA5_AREA",
     "merra-2": "MERRA2_AREA",
+}
+
+#: canonical provider name -> region-tag env var, set alongside
+#: _AREA_ENV_VAR so the downloader's local_path() can disambiguate a
+#: country-scoped run's raw download filename from a different
+#: country's (see downloader.py's local_path/content_key in both
+#: providers) -- internal plumbing, not documented in .env.example.
+_REGION_TAG_ENV_VAR = {
+    "era5-land": "ERA5_REGION_TAG",
+    "merra-2": "MERRA2_REGION_TAG",
 }
 
 #: canonical provider name -> pipeline module (raw run_pipeline(), not facade)
@@ -392,7 +403,16 @@ def cmd_fetch(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR0912
                 region_tag = get_country_code(args.country)
             else:
                 bbox = _BBox.parse(args.bbox)
-                region_tag = "CUSTOM"
+                # "CUSTOM" alone collides across different bboxes for
+                # the same year/month (they'd share both the download
+                # AND output filename tag) -- a short deterministic
+                # hash of the actual bbox values keeps the readable
+                # prefix while making two different --bbox values
+                # produce disjoint tags.
+                bbox_hash = hashlib.sha256(
+                    str(tuple(bbox)).encode()
+                ).hexdigest()[:6]
+                region_tag = f"CUSTOM-{bbox_hash}"
         except ValueError as exc:
             print(f"Error: {exc}")
             return 1
@@ -408,6 +428,14 @@ def cmd_fetch(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR0912
             os.environ[env_var] = ",".join(
                 str(v) for v in bbox.to_area_list()
             )
+            # Also tags the raw download-phase filename (see
+            # downloader.py's local_path()), not just the output file
+            # -- without this, a second country/bbox run against the
+            # same work_dir can silently reuse the FIRST region's
+            # cached raw download for the same year/month (fixed
+            # 2026-08-15; see docs/WEATHER_FETCH_GUIDE.md's "Region-
+            # scoped download caching" section).
+            os.environ[_REGION_TAG_ENV_VAR[canonical]] = region_tag
             print(
                 f"Area override: {env_var}={os.environ[env_var]} "
                 f"(tag: {region_tag})"

@@ -434,6 +434,92 @@ class TestAreaOverride:
         assert rc == 1
         assert "Error" in capsys.readouterr().out
 
+    def test_country_sets_merra2_region_tag_env_var(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """The actual bug fix: without this, a second country-scoped
+        fetch against the same work_dir can silently reuse the first
+        country's cached raw download for the same year/month."""
+        monkeypatch.delenv("MERRA2_AREA", raising=False)
+        monkeypatch.delenv("MERRA2_REGION_TAG", raising=False)
+        _patch_provider(monkeypatch, "merra-2")
+        _install_fake_pipeline(
+            monkeypatch,
+            "merra-2",
+            lambda **kw: _monthly_paths(tmp_path, "merra-2", 2018, [1]),
+        )
+        rc = unified_cli.cmd_fetch(
+            _args(range="single-month", year=2018, month=1, country="netherlands")
+        )
+        assert rc == 0
+        assert os.environ["MERRA2_REGION_TAG"] == "NL"
+
+    def test_bbox_sets_era5_region_tag_env_var(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.delenv("ERA5_AREA", raising=False)
+        monkeypatch.delenv("ERA5_REGION_TAG", raising=False)
+        _patch_provider(monkeypatch, "era5-land")
+        _install_fake_pipeline(
+            monkeypatch,
+            "era5-land",
+            lambda **kw: _monthly_paths(tmp_path, "era5-land", 2018, [1]),
+        )
+        rc = unified_cli.cmd_fetch(
+            _args(
+                provider="era5-land",
+                range="single-month",
+                year=2018,
+                month=1,
+                bbox="52.5,4.5,51.5,5.5",
+            )
+        )
+        assert rc == 0
+        tag = os.environ["ERA5_REGION_TAG"]
+        assert tag.startswith("CUSTOM-")
+        assert tag != "CUSTOM"  # the pre-fix literal, must be disambiguated
+
+    def test_two_different_bboxes_produce_different_custom_tags(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        _patch_provider(monkeypatch, "era5-land")
+        _install_fake_pipeline(
+            monkeypatch,
+            "era5-land",
+            lambda **kw: _monthly_paths(tmp_path, "era5-land", 2018, [1]),
+        )
+        unified_cli.cmd_fetch(
+            _args(
+                provider="era5-land", range="single-month", year=2018, month=1,
+                bbox="52.5,4.5,51.5,5.5",
+            )
+        )
+        tag_a = os.environ["ERA5_REGION_TAG"]
+        unified_cli.cmd_fetch(
+            _args(
+                provider="era5-land", range="single-month", year=2018, month=1,
+                bbox="48.0,12.0,47.0,13.0",
+            )
+        )
+        tag_b = os.environ["ERA5_REGION_TAG"]
+        assert tag_a != tag_b
+
+    def test_plain_fetch_never_sets_region_tag_env_vars(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        monkeypatch.delenv("ERA5_REGION_TAG", raising=False)
+        monkeypatch.delenv("MERRA2_REGION_TAG", raising=False)
+        _patch_provider(monkeypatch, "merra-2")
+        _install_fake_pipeline(
+            monkeypatch,
+            "merra-2",
+            lambda **kw: _monthly_paths(tmp_path, "merra-2", 2018, [1]),
+        )
+        rc = unified_cli.cmd_fetch(
+            _args(range="single-month", year=2018, month=1)
+        )
+        assert rc == 0
+        assert "ERA5_REGION_TAG" not in os.environ
+        assert "MERRA2_REGION_TAG" not in os.environ
+
 
 # ---------------------------------------------------------------------------
 # --percentile
@@ -506,6 +592,10 @@ class TestRegionTag:
         assert not original.exists()
 
     def test_bbox_tag_uses_custom(self, monkeypatch, tmp_path) -> None:
+        """The tag is CUSTOM-<hash>, not the bare literal "CUSTOM" --
+        two different --bbox values must not collide on the same
+        tagged output filename (or, before this session's fix, the
+        same raw download filename either)."""
         monkeypatch.delenv("ERA5_AREA", raising=False)
         _patch_provider(monkeypatch, "era5-land")
         _install_fake_pipeline(
@@ -523,7 +613,8 @@ class TestRegionTag:
             )
         )
         assert rc == 0
-        assert (tmp_path / "output" / "ERA5_LAND_CUSTOM_2018_01_all_attrs.nc").exists()
+        matches = list((tmp_path / "output").glob("ERA5_LAND_CUSTOM-*_2018_01_all_attrs.nc"))
+        assert len(matches) == 1
 
     def test_country_tag_renames_cosmo_output_too(
         self, monkeypatch, tmp_path

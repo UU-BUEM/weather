@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.3] - 2026-08-15
+
+### Fixed
+
+- Real, confirmed silent-wrong-data bug in `weather fetch --country`/
+  `--bbox` for era5-land/merra-2: the raw download-phase filename
+  carried no area/region identifier at all, while its content was
+  server-side cropped to whatever area was requested. Combined with
+  both providers' completeness check being existence-only (neither's
+  remote source can report a size before processing), a second
+  country-scoped fetch for the same year/month against the same
+  `work_dir` silently reused the first country's cached raw download
+  — e.g. a `germany` fetch after a `netherlands` fetch produced an
+  output file labeled Germany but actually populated with Netherlands
+  data, with no error, warning, or overwrite. Fixed via two mechanisms:
+  region-tagged download filenames (`downloader.py::local_path()` in
+  both providers, matching the existing output-file tagging
+  convention) and a new `content_key()`/sidecar hook in
+  `base_downloader.py` as a defense-in-depth backstop for callers that
+  bypass `weather fetch` (e.g. the documented `export ERA5_AREA=...`
+  bulk-run workflow) — a missing sidecar is always trusted, making the
+  fix zero-migration-risk for every already-completed real archive.
+  COSMO-REA6 unaffected by design (DWD always serves the whole domain
+  regardless of any crop request). Full writeup:
+  `docs/WEATHER_FETCH_GUIDE.md`'s "Region-scoped download caching"
+  section.
+- Related gap found by the same investigation: every custom `--bbox`
+  crop got the literal same `"CUSTOM"` tag, so two different custom
+  bboxes for the same year/month collided on the same tagged filename
+  too. Now derives a short deterministic hash from the actual bbox
+  values (`CUSTOM-<hash>`).
+
 ## [1.9.2] - 2026-08-14
 
 ### Fixed

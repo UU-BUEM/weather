@@ -203,8 +203,10 @@ whether the provider has a server-side area-subsetting endpoint at all (see
   after the provider prefix, e.g. `MERRA2_NL_2023_01_all_attrs.nc`.
 - `--bbox "N,W,S,E"` crops to an arbitrary custom box (degrees, comma-separated,
   parsed by `BBox.parse()`). Since no short code exists for an arbitrary box,
-  the filename gets a literal `CUSTOM` tag instead, e.g.
-  `ERA5_LAND_CUSTOM_2018_03_all_attrs.nc`.
+  the filename gets a `CUSTOM-<hash>` tag instead (a short deterministic hash
+  of the bbox values, e.g. `ERA5_LAND_CUSTOM-3afb6f_2018_03_all_attrs.nc`) —
+  not the bare literal `CUSTOM`, so two different `--bbox` values for the same
+  year/month never collide on the same filename.
 
 #### Two different mechanisms
 
@@ -260,6 +262,47 @@ finished months too, since their untagged path was renamed away and
 per-month resume awareness for tagged runs would need `run_pipeline()` to accept
 an explicit remaining-months subset — out of scope for now. The common case (a
 tagged year is either fully done or not started) is handled correctly.
+
+#### Region-scoped download caching (era5-land / merra-2)
+
+Fixed 2026-08-15: a real, confirmed silent-wrong-data bug, found while
+investigating a report that MERRA-2's downloaded raw files "have the same
+names irrespective of the region selected." Before the fix, the raw
+download-phase filename (`download_dir/ERA5_LAND_<YYYY>_<MM>_all_attrs.grib`,
+`download_dir/MERRA2_<collection>_<YYYYMMDD>.nc4`) carried no area/region
+identifier at all, while its *content* was server-side cropped to whatever
+`ERA5_AREA`/`MERRA2_AREA` was set to — so a `netherlands` fetch followed by a
+`germany` fetch for the same year/month against the same `work_dir` silently
+reused the Netherlands-cropped raw file for the Germany request (the
+completeness check is existence-only for both providers, since neither's
+remote source can report a size before processing), producing an output file
+labeled Germany but actually populated with Netherlands data. No error,
+warning, or overwrite — the second fetch simply skipped downloading anything.
+
+Two mechanisms now prevent this, both active for every `--country`/`--bbox`
+fetch:
+
+1. **Region-tagged download filenames** — `local_path()` in both providers'
+   `downloader.py` inserts the region tag right after the provider prefix
+   (e.g. `ERA5_LAND_NL_2018_01_all_attrs.grib`), the exact same convention
+   already used for output files. Two different regions for the same
+   year/month now resolve to disjoint download paths, so they simply can't
+   collide. Untagged (no `--country`/`--bbox`) fetches keep byte-identical
+   filenames to before this feature existed.
+2. **Content-key sidecar** (`base_downloader.py`'s `content_key()` hook) — a
+   defense-in-depth backstop for callers that bypass `weather fetch`
+   entirely, e.g. the documented `export ERA5_AREA=...` bulk-run workflow
+   (`docs/BULK_RUN_GUIDE_ERA5-LAND.md`). Each download writes a small
+   `<file>.area` sidecar recording the area actually used; a later request
+   against the same path with a *different* area is detected as a mismatch
+   and forces a real re-fetch instead of reusing stale content. A **missing**
+   sidecar is always trusted (existing behavior, unchanged) — this is what
+   makes the fix zero-migration-risk for every already-completed real
+   archive (no sidecars exist yet, so nothing changes for them until a
+   second, differently-scoped run actually happens against the same path).
+   COSMO-REA6 never overrides `content_key()` (DWD always serves the whole
+   domain regardless of any crop request, so this class of bug can't occur
+   for it) — a hard no-op, verified in `tests/test_base_downloader.py`.
 
 --------------------------------------------------------------------
 
