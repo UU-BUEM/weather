@@ -9,6 +9,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Percentile representative-year selection did not produce the
+  documented P-levels, in all three providers.** The selection minimised
+  `|fraction of a year's days at or below the pooled P-threshold - q|`.
+  A *typical* year has ~10% of its days below the pooled P10 by
+  definition, so that rule picked the typical year at every level and
+  actively rejected genuinely cloudy (P10) and sunny (P90) ones.
+  Measured against the real 76-year ERA5-Land archive, the selected
+  years' brightness ranks were 0.273 / 0.240 / 0.268 for P10 / P50 /
+  P90 instead of 0.10 / 0.50 / 0.90 — **P90 was returning years
+  cloudier than the median**. Replaced with a ranking on cumulative
+  monthly GHI, which is what `docs/percentile_methodology.md` section 2
+  (ASHRAE TMY3) already specified. All percentile output generated
+  before this release should be regenerated.
+- Same statistic was also quantised: being a day count over `max_days`
+  it could take only `max_days + 1` values, so with 31-day months and
+  76 candidate years **every** cell had ties (median 12-20 years, mean
+  ~42), and `np.argmin` awarded each tie to whichever year sorted
+  first — handing the earliest archive year 52-59% of all cells at
+  every level. The replacement metric is a real-valued sum, so ties
+  effectively vanish. The now-obsolete Numba kernel (which implemented
+  the same wrong statistic behind `WEATHER_USE_NUMBA_KS`) was removed
+  rather than left as a landmine; the new metric needs no per-cell
+  sorting and is pure vectorised numpy.
+- Percentile mosaic assembly crashed on January for any archive whose
+  months do not share one time axis. ERA5-Land's 1950-01 has no 00:00
+  stamp upstream (743 hours from 01:00, vs 744 for every other
+  January); the mosaic was sized from the earliest *winning* year, so
+  once 1950 won a cell the array was an hour short and the next year
+  raised `ValueError: shape mismatch: value array of shape (744,N)
+  could not be broadcast to indexing result of shape (743,N)`. The
+  mosaic is now sized from the longest axis across winning years and
+  each year is written at its own hour offset.
+- New `providers/era5_land/spike_repair.py`: repairs physically
+  impossible flux spikes at interior stamps. For a very small number of
+  individual cells the transform lost one accumulation step and stored
+  the previous day's whole accumulated total in its place, yielding an
+  hourly "flux" of thousands of W/m^2 (peak 7624 W/m^2 — 5.6x the solar
+  constant), plus a companion error at the following stamp. Incidence
+  on the real 1950-2025 archive: 11 values across 912 monthly files.
+  The true values are not derivable from the NetCDF but are still in
+  the cached raw GRIB, so they are recomputed exactly rather than
+  interpolated. `boundary_repair.py` now also detects such values and
+  logs an actionable error, since it only ever touches stamp 0.
+
+### Changed
+
+- `tests/audit_imports.py` now enforces hard convention #1 rather than
+  only the narrower NameError case, and three real bugs in the auditor
+  itself were fixed: with no arguments it audited nothing and still
+  exited 0; `all(...)` over a generator short-circuited the sweep at the
+  first failing file (so most of the tree was never reached — 109 files
+  are now scanned, previously as few as 17); and function parameters
+  were not counted as bindings, which reported `def f(..., xr)` as
+  out-of-scope usage. It now also flags a hard dependency imported
+  inside a function, exempting optional extras (`pvlib`, `xarray`,
+  `dask`, ...) for which a function-local import is what keeps a light
+  install importable.
+- Hoisted the function-local hard-dependency imports the corrected audit
+  found, across `providers/era5_land/boundary_repair.py`,
+  `common/derived_attributes.py`, `providers/base_percentile.py`,
+  `providers/cosmo_rea6/{export,transform}.py` and five `tests/` tools.
+  `common/merge.py`'s local `xarray` import is deliberate and was left
+  alone — `xarray` is an extra, not a base dependency.
+
 ## [1.9.3] - 2026-08-15
 
 ### Fixed

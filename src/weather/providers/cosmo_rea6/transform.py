@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import pandas as pd
 
 from ...common.cf_conventions import attach_cf_latlon_attrs
 from ...common.derived_attributes import (
@@ -598,7 +599,6 @@ def compute_dni(
     Spencer, J. W. (1971). Fourier series representation of the position
     of the sun.  *Search*, 2(5), 172.
     """
-    import pandas as pd
 
     xr = _import_xarray()
 

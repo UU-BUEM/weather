@@ -1,16 +1,17 @@
 """COSMO-REA6 percentile indexer - pure CPU/numpy implementation.
 
 Derives P10, P50, and P90 representative-year mosaics for every grid
-cell (824 x 848) across the 1995-2018 COSMO-REA6 dataset using the
-Finkelstein-Schafer (FH) KS-distance method applied to monthly GHI.
+cell (824 x 848) across the 1995-2018 COSMO-REA6 dataset by ranking
+candidate years on cumulative monthly GHI, as documented in
+``docs/percentile_methodology.md``.
 
 Pipeline
 --------
 1. Load   : 288 monthly NetCDF files read in parallel (94 workers).
             Daily GHI sums extracted; leap days removed.
-2. KS     : For each month and cell, identify the year whose empirical
-            GHI CDF most closely matches the pooled P10/P50/P90
-            threshold (minimum absolute KS distance).  Pure numpy;
+2. Select : For each month and cell, total each year's daily GHI and
+            pick the year nearest the 10th/50th/90th percentile of
+            those totals taken across years.  Pure numpy;
             completes in under one second per month.
 3. Mosaic : Spawn workers write 36 output NetCDF files (12 months x
             3 percentiles).  Each worker opens one source file at a
@@ -52,81 +53,6 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Optional Numba acceleration
-# Set WEATHER_USE_NUMBA_KS=1 to enable the Numba path in _compute_ks_for_month
-# ---------------------------------------------------------------------------
-try:
-    from numba import njit, prange  # type: ignore[import]
-    NUMBA_AVAILABLE: bool = True
-except Exception:  # noqa: BLE001
-    NUMBA_AVAILABLE = False
-
-
-if NUMBA_AVAILABLE:
-    @njit(parallel=True, cache=True)  # type: ignore[misc]
-    def _numba_ks_month(
-        stacked: np.ndarray,
-        val_p10: np.ndarray,
-        val_p50: np.ndarray,
-        val_p90: np.ndarray,
-    ) -> tuple:
-        """Compute per-cell KS argmin via a Numba parallel loop.
-
-        Parameters
-        ----------
-        stacked : np.ndarray, shape (Y, T, R, L), float32
-            Daily GHI sums for all years, days, rows, and columns.
-        val_p10 : np.ndarray, shape (R, L), float32
-            Global P10 threshold per grid cell.
-        val_p50 : np.ndarray, shape (R, L), float32
-            Global P50 threshold per grid cell.
-        val_p90 : np.ndarray, shape (R, L), float32
-            Global P90 threshold per grid cell.
-
-        Returns
-        -------
-        tuple of three np.ndarray, each shape (R, L), int32
-            Best-year index arrays for P10, P50, and P90.
-        """
-        n_years, _n_t, rows, cols = stacked.shape
-        best_p10 = np.zeros((rows, cols), dtype=np.int32)
-        best_p50 = np.zeros((rows, cols), dtype=np.int32)
-        best_p90 = np.zeros((rows, cols), dtype=np.int32)
-
-        for r in prange(rows):  # type: ignore[attr-defined]  # noqa: E741
-            for c in range(cols):
-                v10 = val_p10[r, c]
-                v50 = val_p50[r, c]
-                v90 = val_p90[r, c]
-                best_d10 = np.float32(1e9)
-                best_d50 = np.float32(1e9)
-                best_d90 = np.float32(1e9)
-                for y in range(n_years):
-                    ys = np.sort(stacked[y, :, r, c])
-                    ny = len(ys)
-                    d10 = abs(
-                        np.searchsorted(ys, v10) / ny - np.float32(0.10)
-                    )
-                    d50 = abs(
-                        np.searchsorted(ys, v50) / ny - np.float32(0.50)
-                    )
-                    d90 = abs(
-                        np.searchsorted(ys, v90) / ny - np.float32(0.90)
-                    )
-                    if d10 < best_d10:
-                        best_d10 = d10
-                        best_p10[r, c] = y
-                    if d50 < best_d50:
-                        best_d50 = d50
-                        best_p50[r, c] = y
-                    if d90 < best_d90:
-                        best_d90 = d90
-                        best_p90[r, c] = y
-
-        return best_p10, best_p50, best_p90
-
-
-# ---------------------------------------------------------------------------
 # Top-level worker functions
 #
 # These MUST be defined at module top level (not nested inside a class or
@@ -134,6 +60,31 @@ if NUMBA_AVAILABLE:
 # method can locate and import them in child processes.  Nesting them
 # would make them unpicklable and cause immediate BrokenProcessPool errors.
 # ---------------------------------------------------------------------------
+
+def _month_hour_offset(times) -> int:
+    """Hours from the start of the calendar month to ``times[0]``.
+
+    Normally 0.  ERA5-Land's very first archive month (1950-01) is the
+    exception: its 00:00 stamp does not exist upstream, so that file
+    holds 743 hours starting at 01:00 while every other January holds
+    744.  Callers use this to write a short year into the correct slots
+    of a full-length mosaic instead of shifting it an hour early.
+
+    Parameters
+    ----------
+    times : array-like of numpy.datetime64
+        Time coordinate values, already leap-day filtered.
+
+    Returns
+    -------
+    int
+        Whole hours between the 1st of the month at 00:00 and
+        ``times[0]``.
+    """
+    t0 = np.asarray(times)[0].astype("datetime64[h]")
+    month_start = t0.astype("datetime64[M]").astype("datetime64[h]")
+    return int((t0 - month_start) / np.timedelta64(1, "h"))
+
 
 def _preprocess_single_file(file_path: str) -> dict:
     """Load one NetCDF file and return day-summed GHI without leap days.
@@ -344,7 +295,48 @@ def _build_month_mosaic(args: tuple) -> str:
             if wr.size > 0:
                 pct_winners[(pct, local_yi)] = (wr, wl)
 
-    # Scan all years to find a reference file that contains 3-D
+    # Time axes are not identical across years.  ERA5-Land's first
+    # archive month (1950-01) is missing its 00:00 stamp, so it carries
+    # 743 hours starting at 01:00 while every other January carries
+    # 744.  Sizing the mosaic from an arbitrary year -- previously the
+    # earliest winning year -- leaves the array an hour short and the
+    # next year then fails to broadcast into it.  Measure every winning
+    # year first: take the longest axis as the canonical month length
+    # and remember each year's offset.
+    year_offsets: dict[int, int] = {}
+    year_lengths: dict[int, int] = {}
+    for _year in sorted_years:
+        _fp = file_path_lookup.get((_year, month_idx))
+        if not _fp or not os.path.exists(_fp):
+            continue
+        with xr.open_dataset(_fp, engine="netcdf4") as _tds:
+            _tleap = (
+                (_tds.time.dt.month == 2) & (_tds.time.dt.day == 29)
+            )
+            _tvals = _tds.isel(time=~_tleap).time.values
+        year_offsets[_year] = _month_hour_offset(_tvals)
+        year_lengths[_year] = int(len(_tvals))
+
+    if not year_lengths:
+        return f"Month {month_str}: failed (no readable source files)"
+
+    t_size = max(
+        year_offsets[_y] + year_lengths[_y] for _y in year_lengths
+    )
+
+    # Prefer a reference year whose axis spans the whole month from
+    # hour 0 -- its time coordinate is copied verbatim into the output.
+    ref_candidates = sorted(
+        year_lengths,
+        key=lambda _y: (
+            year_offsets[_y] == 0 and year_lengths[_y] == t_size,
+            year_lengths[_y],
+            -_y,
+        ),
+        reverse=True,
+    )
+
+    # Scan those years to find a reference file that contains 3-D
     # (time, y, x) variables.  The first year's file (e.g.
     # 1995) may have a different schema than later years and yield
     # no usable variables; we keep trying until one works.
@@ -355,9 +347,8 @@ def _build_month_mosaic(args: tuple) -> str:
     var_attrs: dict[str, dict] = {}
     ref_coords = None
     ref_attrs: dict = {}
-    t_size: int = 0
 
-    for year in sorted_years:
+    for year in ref_candidates:
         fp = file_path_lookup.get((year, month_idx))
         if not fp or not os.path.exists(fp):
             continue
@@ -405,7 +396,6 @@ def _build_month_mosaic(args: tuple) -> str:
                 for k in _ref_filt.coords
             }
             ref_attrs = dict(_ref_filt.attrs)
-            t_size = _ref_filt.sizes.get("time", 0)
         break  # stop after first usable year
 
     if ref_fp is None or not var_names:
@@ -474,6 +464,7 @@ def _build_month_mosaic(args: tuple) -> str:
             }
 
         actual_t = next(iter(year_vars.values())).shape[0]
+        offset = year_offsets.get(year, 0)
 
         # Write winning cells for every percentile simultaneously
         for pct in ("P10", "P50", "P90"):
@@ -482,9 +473,9 @@ def _build_month_mosaic(args: tuple) -> str:
                 continue
             wr, wl = pct_winners[key]
             for v, year_data in year_vars.items():
-                mosaics[pct][v][:actual_t, wr, wl] = (
-                    year_data[:actual_t, wr, wl]
-                )
+                mosaics[pct][v][
+                    offset:offset + actual_t, wr, wl
+                ] = year_data[:actual_t, wr, wl]
 
         del year_vars
 
@@ -750,9 +741,9 @@ class CosmoRea6PercentileIndexer:
     ) -> dict:
         """Run KS distribution matching for one month.
 
-        For each grid cell, finds the year whose empirical CDF of
-        daily GHI sums most closely matches the pooled P10, P50, and
-        P90 thresholds (minimum absolute KS distance).
+        For each grid cell, totals that year's daily GHI sums and
+        selects the year sitting nearest the 10th, 50th and 90th
+        percentile of those totals taken across all years.
 
         Uses fully vectorised numpy operations.  Working set is
         approximately 2 GB for 24 years x 32 days x 824 x 848 float32.
@@ -791,67 +782,37 @@ class CosmoRea6PercentileIndexer:
             n_days = monthly_registry[month][y].shape[0]
             stacked[yi, :n_days] = monthly_registry[month][y]
 
-        # Global pooled CDF thresholds: shape (R, L)
-        pooled_sorted = np.sort(
-            stacked.reshape(
-                n_years * max_days, self.n_y, self.n_lon
-            ),
-            axis=0,
-        )
-        n_pool = pooled_sorted.shape[0]
-        val_p10 = pooled_sorted[int(n_pool * 0.10)]
-        val_p50 = pooled_sorted[int(n_pool * 0.50)]
-        val_p90 = pooled_sorted[int(n_pool * 0.90)]
-        del pooled_sorted
+        # Per-year monthly GHI total for every cell: shape (Y, R, L).
+        # This is the ranking metric documented in
+        # docs/percentile_methodology.md section 2 -- ASHRAE TMY3 ranks
+        # candidate years by cumulative monthly global radiation.
+        #
+        # It replaces a "fraction of this year's days at or below the
+        # pooled P-threshold" statistic that could not deliver the
+        # documented P-levels: a TYPICAL year has ~10% of its days
+        # below the pooled P10 by definition, so argmin|cdf - 0.10|
+        # picked the typical year and rejected genuinely cloudy ones,
+        # and argmin|cdf - 0.90| likewise rejected sunny ones. Being a
+        # count / max_days it also quantised to max_days + 1 levels, so
+        # dozens of years tied in every cell and np.argmin handed each
+        # tie to whichever year sorted first.
+        year_total = stacked.sum(axis=1, dtype=np.float64)
 
-        use_numba = (
-            NUMBA_AVAILABLE
-            and os.getenv("WEATHER_USE_NUMBA_KS", "0") == "1"
-        )
-        if use_numba:
-            best_p10, best_p50, best_p90 = _numba_ks_month(
-                stacked, val_p10, val_p50, val_p90
-            )
-        else:
-            # Per-year CDF fraction: what share of a year's days
-            # fall at or below each global threshold?
-            # sorted_years shape: (Y, T, R, L)
-            sorted_years = np.sort(stacked, axis=1)
+        # Target radiation level per percentile, taken ACROSS years.
+        # np.quantile interpolates between the two bracketing years;
+        # argmin then snaps to whichever real year sits nearest, so the
+        # chosen year's brightness rank comes out at ~= q.
+        best: dict[float, np.ndarray] = {}
+        for _q in (0.10, 0.50, 0.90):
+            _target = np.quantile(year_total, _q, axis=0)
+            best[_q] = np.argmin(
+                np.abs(year_total - _target[None]), axis=0
+            ).astype(np.int32)
 
-            # cdf shape: (Y, R, L)
-            cdf_p10 = (
-                np.sum(
-                    sorted_years <= val_p10[None, None],
-                    axis=1,
-                ).astype(np.float32)
-                / max_days
-            )
-            cdf_p50 = (
-                np.sum(
-                    sorted_years <= val_p50[None, None],
-                    axis=1,
-                ).astype(np.float32)
-                / max_days
-            )
-            cdf_p90 = (
-                np.sum(
-                    sorted_years <= val_p90[None, None],
-                    axis=1,
-                ).astype(np.float32)
-                / max_days
-            )
-            del sorted_years
-
-            best_p10 = np.argmin(
-                np.abs(cdf_p10 - 0.10), axis=0
-            ).astype(np.int32)
-            best_p50 = np.argmin(
-                np.abs(cdf_p50 - 0.50), axis=0
-            ).astype(np.int32)
-            best_p90 = np.argmin(
-                np.abs(cdf_p90 - 0.90), axis=0
-            ).astype(np.int32)
-            del cdf_p10, cdf_p50, cdf_p90
+        best_p10 = best[0.10]
+        best_p50 = best[0.50]
+        best_p90 = best[0.90]
+        del year_total, best
 
         year_arr = np.array(available_years, dtype=np.int32)
         tag = f"{month:02d}"

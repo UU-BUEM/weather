@@ -264,7 +264,6 @@ class BasePercentileAnalyzer(ABC):
         Path
             *output_path* after writing.
         """
-        import numpy as np
         import xarray as xr
 
         n_hours = self.standard_time_hours()
