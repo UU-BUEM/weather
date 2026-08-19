@@ -26,10 +26,20 @@ a single stamp, all at high northern latitudes in summer.
 The repair
 ----------
 Unlike the month-boundary repair, the correct value is *not* derivable
-from data already in the NetCDF: it was never written. It is however
-still present in the cached raw GRIB, so this module re-reads the two
-accumulation steps it needs and recomputes both stamps exactly. No
-interpolation or gap-filling is involved.
+from data already in the NetCDF: it was never written. This module
+re-reads the two accumulation steps it needs from the cached raw GRIB
+and recomputes both stamps exactly. No interpolation or gap-filling is
+involved.
+
+Where the raw accumulation is itself absent -- ERA5-Land flags absent
+data with a sentinel value (``missingValue``, 9999) rather than a NaN
+bit pattern -- the hourly value is genuinely unknowable and is blanked
+to NaN. Decoding that sentinel matters: taken at face value it reads as
+a perfectly plausible 9999 J/m^2 (2.8 W/m^2), so an undecoded repair
+would replace a visibly absurd number with an invisibly wrong one. On
+the real archive every one of the 11 occurrences is this case: the
+step-1 field carries exactly one missing cell beyond the standard
+land-sea mask, and it is the spiking cell.
 
 Auditability
 ------------
@@ -203,9 +213,17 @@ def _read_accumulations(
                         int(codes_get(gid, "step")),
                     )
                     if key in wanted and key not in out:
-                        out[key] = np.asarray(
+                        vals = np.asarray(
                             codes_get_double_array(gid, "values")
                         )
+                        # ERA5-Land marks absent data with a sentinel
+                        # (9999) rather than a NaN bit pattern. Decode
+                        # it, or a missing cell reads as a plausible
+                        # 9999 J/m^2 -> 2.8 W/m^2 and we would be
+                        # inventing data out of a flag.
+                        missing = float(codes_get(gid, "missingValue"))
+                        vals[vals == missing] = np.nan
+                        out[key] = vals
             finally:
                 codes_release(gid)
             if len(out) == len(wanted):
@@ -318,7 +336,10 @@ def repair_file(
                 "y": y_idx,
                 "x": x_idx,
                 "from": round(before, 4),
-                "to": round(truth, 4),
+                # None, not NaN: the accumulation this stamp needs is
+                # absent upstream, so the hourly value is genuinely
+                # unknowable and is blanked rather than invented.
+                "to": None if not np.isfinite(truth) else round(truth, 4),
             })
 
         if records and not dry_run:
