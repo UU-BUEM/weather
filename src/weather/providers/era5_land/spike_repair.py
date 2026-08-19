@@ -51,6 +51,8 @@ import argparse
 import json
 import logging
 import re
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -139,6 +141,31 @@ def find_spikes(
         for t, y, x in hits
         if int(t) >= 1
     ]
+
+
+def _has_spike(nc_path: Path, ceiling: float = CEILING_W_M2) -> bool:
+    """True if *nc_path* holds any impossible value. Worker for the sweep.
+
+    Parameters
+    ----------
+    nc_path : pathlib.Path
+        Monthly output NetCDF to inspect.
+    ceiling : float, optional
+        Detection threshold in W/m^2.
+
+    Returns
+    -------
+    bool
+        Whether at least one interior stamp exceeds *ceiling*.
+    """
+    try:
+        with xr.open_dataset(nc_path, engine="netcdf4") as ds:
+            return any(
+                find_spikes(ds, var, ceiling) for var in _ACCUMULATED
+            )
+    except Exception:  # noqa: BLE001
+        logger.exception("%s: could not be scanned", nc_path.name)
+        return False
 
 
 def _read_accumulations(
@@ -323,6 +350,7 @@ def repair_spikes(
     *,
     ceiling: float = CEILING_W_M2,
     dry_run: bool = False,
+    workers: int = 16,
 ) -> dict[str, list[dict]]:
     """Scan an output folder and repair every impossible value found.
 
@@ -336,6 +364,8 @@ def repair_spikes(
         Detection threshold in W/m^2.
     dry_run : bool, optional
         Report without writing.
+    workers : int, optional
+        Parallelism for the detection sweep.
 
     Returns
     -------
@@ -350,8 +380,28 @@ def repair_spikes(
     logger.info("Scanning %d file(s) for values > %.0f W/m^2",
                 len(files), ceiling)
 
+    # Detection reads every hour of every file, so it dominates the
+    # runtime (~1.2 GB per file) even though only a handful of files
+    # ever need repairing. Fan it out, then repair the few hits
+    # sequentially -- those also need the raw GRIB.
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        flagged = [
+            path
+            for path, hit in zip(
+                files,
+                pool.map(
+                    partial(_has_spike, ceiling=ceiling),
+                    files,
+                    chunksize=4,
+                ),
+                strict=True,
+            )
+            if hit
+        ]
+    logger.info("%d file(s) contain impossible values", len(flagged))
+
     fixed: dict[str, list[dict]] = {}
-    for nc_path in files:
+    for nc_path in flagged:
         grib_path = download_dir / (nc_path.stem + ".grib")
         records = repair_file(
             nc_path, grib_path, ceiling=ceiling, dry_run=dry_run
@@ -382,6 +432,7 @@ def main() -> None:
     parser.add_argument("--download-dir", required=True, type=Path)
     parser.add_argument("--ceiling", type=float, default=CEILING_W_M2)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--workers", type=int, default=16)
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -393,6 +444,7 @@ def main() -> None:
         args.download_dir,
         ceiling=args.ceiling,
         dry_run=args.dry_run,
+        workers=args.workers,
     )
 
 
