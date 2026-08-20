@@ -32,7 +32,10 @@ FIRST_YEAR = 1950
 
 #: Selection block shared verbatim by all three providers.
 _SELECT_RE = re.compile(
-    r"        # Per-year monthly GHI total.*?        del year_total, best\n",
+    # Tolerate extra names on the trailing `del` -- this guards the
+    # three copies against drifting apart, not the block against change.
+    r"        # Per-year monthly GHI total.*?"
+    r"        del year_total, best[^\n]*\n",
     re.S,
 )
 
