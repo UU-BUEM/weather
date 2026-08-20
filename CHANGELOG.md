@@ -11,16 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- COSMO-REA6's monthly exports carry a trailing stamp from the **next**
-  month, so a 28-day February resampled to 29 daily bins — 30 in leap
-  years, the last entirely NaN. Verified across the real archive: all
-  296 monthly files are affected, every month one day too long. That
-  added a spurious partial day to each year's monthly GHI total and
-  left years with differing bin counts not comparable. Daily sums are
-  now restricted to stamps belonging to the file's own calendar month.
-  Confirmed a no-op for the other two providers — 0 of ERA5-Land's 912
-  and 0 of MERRA-2's 552 files carry an out-of-month stamp — so their
-  percentile output is unaffected and was not regenerated.
+- COSMO-REA6 stamps hours as **ending**: a January file runs `01:00` on
+  the 1st through `00:00` on Feb 1 — exactly 744 stamps, one whole
+  month. Because that final stamp bears the *next* month's date,
+  resampling by calendar day opened a spurious one-hour 32nd bin (30
+  for a leap February, the extra one all-NaN), which both distorted the
+  year's monthly GHI total and left years with differing bin counts not
+  comparable. Daily sums are now clipped to the file's own calendar
+  month. Verified empirically across all three providers: the clip
+  yields the correct 31/28/28/31 day counts everywhere, where the old
+  leap-only filter gave COSMO 32/30/29/32. Confirmed a no-op for
+  ERA5-Land and MERRA-2 — 0 of 912 and 0 of 552 files carry an
+  out-of-month stamp — so their output was not regenerated.
+  Known consequence: the clip drops COSMO's final stamp, leaving a
+  monthly total 1 hour short of 744. It is uniform across every year,
+  so it cannot bias a between-year ranking, but it is a real ~0.13%
+  truncation and is not corrected.
+- Mosaic time offsets are anchored to the earliest start among the
+  winning years instead of to midnight. Every COSMO year starts at
+  hour 1 (hour-ending stamps), so midnight-anchoring sized the mosaic
+  one slot longer than any source file holds, while the output time
+  coordinate is copied from a real file — every month then died with
+  `ValueError: conflicting sizes for dimension 'time'`. ERA5-Land
+  escaped this only because most of its years do start at midnight, so
+  a valid reference year existed; its lone short month (1950-01, which
+  has no 00:00 stamp upstream) is still placed at its true offset.
 - A cell was invalidated when **any** year lacked data there. Once
   COSMO's leap Februaries contributed an all-NaN day, that flagged all
   698,752 cells and the mosaic skipped months 02, 05 and 12 outright
