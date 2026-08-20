@@ -370,6 +370,16 @@ def _build_month_mosaic(args: tuple) -> str:
     if not year_lengths:
         return f"Month {month_str}: failed (no readable source files)"
 
+    # Offsets are relative to the EARLIEST start among the winning
+    # years, not to midnight. COSMO-REA6 stamps hours as ending
+    # (01:00 .. next month 00:00), so every one of its years starts at
+    # hour 1; anchoring on midnight would size the mosaic one slot
+    # longer than any file can fill, and since the output time
+    # coordinate is copied from a real file it would then be one stamp
+    # short of the data ("conflicting sizes for dimension 'time'").
+    _base = min(year_offsets.values())
+    for _y in year_offsets:
+        year_offsets[_y] -= _base
     t_size = max(
         year_offsets[_y] + year_lengths[_y] for _y in year_lengths
     )

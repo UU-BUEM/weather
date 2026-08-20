@@ -166,6 +166,30 @@ def test_cells_without_source_data_are_flagged_not_awarded():
         )
 
 
+def test_uniform_nonzero_offset_does_not_oversize_the_mosaic():
+    """When every year starts at the same non-midnight hour.
+
+    COSMO-REA6 stamps hours as ending (01:00 .. next month 00:00), so
+    all its years start at hour 1. Anchoring offsets on midnight sized
+    the mosaic one slot longer than any file could fill, and since the
+    output time coordinate is copied from a real file, ``to_netcdf``
+    then rejected the write with "conflicting sizes for dimension
+    'time'". Offsets must be relative to the earliest start.
+    """
+    # Every year: starts at hour 1, holds 743 stamps (COSMO January).
+    offsets = {y: 1 for y in range(1995, 2020)}
+    lengths = {y: 743 for y in offsets}
+
+    base = min(offsets.values())
+    offsets = {y: o - base for y, o in offsets.items()}
+    t_size = max(offsets[y] + lengths[y] for y in lengths)
+
+    assert t_size == 743, "mosaic oversized past what any file can fill"
+    assert any(
+        offsets[y] == 0 and lengths[y] == t_size for y in lengths
+    ), "no year can serve as the reference time coordinate"
+
+
 def test_one_bad_year_does_not_wipe_the_whole_month():
     """A single unusable year must not disqualify every cell.
 
