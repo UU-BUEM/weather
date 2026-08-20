@@ -356,10 +356,16 @@ def _build_month_mosaic(args: tuple) -> str:
         if not _fp or not os.path.exists(_fp):
             continue
         with xr.open_dataset(_fp, engine="netcdf4") as _tds:
-            _tleap = (
+            # Same clip the daily sums use (see
+            # _preprocess_single_file): drop leap days AND any stamp
+            # belonging to a neighbouring month. Without the second
+            # half the mosaic is sized one hour longer than the data
+            # it holds, and to_netcdf rejects the mismatch with
+            # "conflicting sizes for dimension 'time'".
+            _tkeep = (_tds.time.dt.month == month_idx) & ~(
                 (_tds.time.dt.month == 2) & (_tds.time.dt.day == 29)
             )
-            _tvals = _tds.isel(time=~_tleap).time.values
+            _tvals = _tds.isel(time=_tkeep).time.values
         year_offsets[_year] = _month_hour_offset(_tvals)
         year_lengths[_year] = int(len(_tvals))
 
@@ -397,11 +403,11 @@ def _build_month_mosaic(args: tuple) -> str:
         if not fp or not os.path.exists(fp):
             continue
         with xr.open_dataset(fp, engine="netcdf4") as _ref_ds:
-            leap = (
+            keep = (_ref_ds.time.dt.month == month_idx) & ~(
                 (_ref_ds.time.dt.month == 2)
                 & (_ref_ds.time.dt.day == 29)
             )
-            _ref_filt = _ref_ds.isel(time=~leap)
+            _ref_filt = _ref_ds.isel(time=keep)
             _candidates: list[str] = [
                 str(v) for v in _ref_filt.data_vars
                 if (
@@ -483,10 +489,10 @@ def _build_month_mosaic(args: tuple) -> str:
 
         # Open file once; read all variables in one pass
         with xr.open_dataset(fp, engine="netcdf4") as ds:
-            leap = (
+            keep = (ds.time.dt.month == month_idx) & ~(
                 (ds.time.dt.month == 2) & (ds.time.dt.day == 29)
             )
-            ds_filt = ds.isel(time=~leap)
+            ds_filt = ds.isel(time=keep)
             year_vars: dict[str, np.ndarray] = {
                 v: ds_filt[v].values.astype(np.float32)
                 for v in var_names
