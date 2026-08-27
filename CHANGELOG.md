@@ -9,8 +9,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CF metadata layer shared by all three providers**
+  (`common/cf_conventions.py`). Until now no provider's `export.py` had
+  ever written a single global attribute: all 296 COSMO-REA6 monthly
+  files in production carried an empty attribute set — no `Conventions`,
+  no `source`, no provenance at all. `attach_cf_metadata()` is now
+  called by every exporter immediately before writing, so no export can
+  drift onto a partial pass. Spatial and temporal bounds are derived
+  from the dataset itself rather than passed in, so they cannot describe
+  a grid the file does not have.
+- **`common/metadata_repair.py`** — repairs already-exported files in
+  place. Reprocessing to fix metadata would re-read terabytes of GRIB
+  for a change that touches no data, so this edits `ncattrs` only.
+  Idempotent via a marker in `history`; runnable as
+  `python -m weather.common.metadata_repair <dir> --provider <name>`.
+  Verified data-bit-identical (sha256 of every variable) on a real 5 GB
+  archive file before being used on the archives.
+- **`tests/validate_knmi.py`** — validation against MEASURED data, the
+  first check in this repo that is not self-referential. Every other
+  check compares reanalysis output to itself, to another reanalysis, or
+  to physical law; none can detect a bias all reanalyses share. Uses
+  KNMI's free open-data hourly API, discovers stations from the response
+  header rather than hardcoding them, and writes a report plus CSVs to
+  `data/validation/NL/`.
+- Licence and attribution metadata for all three providers, verified
+  from each upstream's own statement rather than assumed: DWD REA is
+  **CC BY 4.0** (`Terms_of_use.txt`, status May 2024) and requires the
+  `Datenbasis: …` citation form for processed data, not `Quelle: …`;
+  ERA5-Land carries the Copernicus §5.1.2 notice with the data year
+  filled per file; MERRA-2 records NASA's no-restriction/CC0 position.
+
 ### Fixed
 
+- **Three `standard_name` values were inherited from cfgrib and were
+  actively wrong**, on every file of every archive: `time` was
+  `forecast_reference_time` (whose CF definition states outright "It is
+  not the time for which the forecast is valid"), `SNOW_DEPTH` was the
+  liquid-water-equivalent name for what is physical depth, and
+  `U_10M`/`V_10M` claimed `eastward_wind`/`northward_wind` on
+  COSMO's rotated-pole grid, where the components are grid-relative.
+  The wind names are **removed** for COSMO rather than replaced — a
+  consumer that finds no `standard_name` falls back to `long_name`,
+  whereas one that finds `eastward_wind` silently produces wrong
+  directions. ERA5-Land and MERRA-2 are on regular grids where the
+  names are correct and keep them.
+- ERA5-Land wrote the literal string `"unknown"` as `standard_name` on
+  six variables and MERRA-2 carried NASA's descriptive labels
+  (`2-meter_air_temperature`, `snow_depth`, …). Neither is a CF name, so
+  a strict checker fails on them. Unmapped non-CF names are now
+  stripped rather than replaced with a guess.
+- Source-grid GRIB attributes (`GRIB_Nx`, `GRIB_numberOfPoints`, corner
+  coordinates) survived cropping and then described a grid the file no
+  longer had — a 56×50 Netherlands crop still claimed 698752 points.
+  Now removed on export; the rotated-pole definition, which stays true
+  for a subset, is kept.
+- **`COSMO_REA6_2005_11` reached production with a different schema**:
+  `SNOWFALL` shaped `(time, step, y, x)`, `step=0` entirely NaN and
+  `step=1` the real accumulation, because cfgrib decoded that month with
+  two forecast steps and `_strip_scalar_coords` only drops
+  *non-dimension* coordinates. One odd-shaped file breaks
+  `open_mfdataset`, the percentile indexer and any consumer assuming one
+  schema. New `transform._collapse_step_dim()` guards recurrence at the
+  single choke point every GRIB passes through.
+- `cell_methods` is no longer guessed. Measured against KNMI: COSMO-REA6
+  is instantaneous (`time: point`, 100 % of stations), ERA5-Land's GHI
+  is an hourly mean (`time: mean`, 89 %). MERRA-2 is declared from
+  NASA's time-averaged `M2T1NX*` collection definition, since its own
+  KNMI result (53 %) is barely above chance — its ~50 km cells swamp the
+  sub-hourly signal the test relies on. Only variables that were
+  actually measured are declared.
+- Removed a stray `$LOG` file that had been committed in `fc69f3c`. The
+  push helpers stage with `git add -A`, so an unexpanded variable in a
+  shell redirect creates a literal `$LOG` file and sweeps it into the
+  next commit; `.gitignore` now guards against this class of artefact.
 - COSMO-REA6 stamps hours as **ending**: a January file runs `01:00` on
   the 1st through `00:00` on Feb 1 — exactly 744 stamps, one whole
   month. Because that final stamp bears the *next* month's date,
