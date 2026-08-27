@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from ...common.cf_conventions import attach_cf_metadata
+
 if TYPE_CHECKING:
     import xarray  # noqa: F401  # type: ignore[import-untyped]
 
@@ -109,6 +111,12 @@ def export_netcdf(
             logger.info("  Computing %s ...", var_name)
             ds[var_name] = ds[var_name].compute()
     logger.info("  All variables computed in %.1f s", time.perf_counter() - t0)
+
+    # Single, shared CF metadata pass -- global attributes plus corrected
+    # standard_name/cell_methods. Lives in common/ so all three providers
+    # emit identical metadata semantics; see the module docstring there
+    # for the two gaps this closes.
+    attach_cf_metadata(ds, "cosmo_rea6")
 
     encoding = _build_encoding(ds, complevel=complevel)
     logger.info("Writing NetCDF to %s (complevel=%d)", output_path, complevel)
