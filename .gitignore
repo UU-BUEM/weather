@@ -112,7 +112,6 @@ ops/
 # in `> "$LOG"`) silently creates a file with that literal name and
 # sweeps it into the next commit. That is exactly how `$LOG` was
 # committed in fc69f3c.
-${
-$LOG
+[$]*
 nohup.out
 *.tmp
