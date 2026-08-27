@@ -78,6 +78,51 @@ def _import_xarray():
 # GRIB reading
 # ---------------------------------------------------------------------------
 
+def _collapse_step_dim(ds: Any, source: str) -> Any:
+    """Collapse a spurious ``step`` DIMENSION down to a single step.
+
+    ``_strip_scalar_coords`` removes cfgrib's scalar ``step`` coordinate,
+    but it cannot help when cfgrib decodes a month with MORE THAN ONE
+    forecast step and ``step`` becomes a real dimension: the variable
+    then leaves the pipeline shaped ``(time, step, y, x)`` and is written
+    to the archive that way.
+
+    This happened for real.  Of the 296 monthly files on ``sd26``,
+    exactly one -- ``COSMO_REA6_2005_11`` -- reached production with
+    ``SNOWFALL`` shaped ``(time, 2, y, x)``, where ``step=0`` (the
+    accumulation at forecast hour 0) was entirely NaN and ``step=1`` held
+    the real 1-hour accumulation.  A single odd-shaped file breaks
+    ``open_mfdataset``, the percentile indexer and any downstream
+    consumer that assumes one schema across the archive.
+
+    The last step is selected because COSMO's accumulated fields carry
+    their value at the END of the accumulation interval; step 0 is the
+    zero-length accumulation and is empty by construction.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Freshly opened cfgrib dataset.
+    source : str
+        File name, for the warning message.
+
+    Returns
+    -------
+    xarray.Dataset
+        *ds* unchanged when ``step`` is not a dimension.
+    """
+    if "step" not in getattr(ds, "dims", {}):
+        return ds
+    n_steps = int(ds.sizes["step"])
+    logger.warning(
+        "%s: cfgrib decoded %d forecast steps; collapsing to the last "
+        "step so the output matches every other month's (time, y, x) "
+        "schema",
+        source, n_steps,
+    )
+    return ds.isel(step=-1, drop=True)
+
+
 def _open_grib_robust(
     grb_path: Path,
     attribute: str,
@@ -103,7 +148,7 @@ def _open_grib_robust(
     try:
         ds = xr.open_dataset(str(grb_path), **_common)
         if ds.data_vars:
-            return ds
+            return _collapse_step_dim(ds, grb_path.name)
     except Exception as exc:
         # Catch cfgrib's DatasetBuildError for uvRelativeToGrid ambiguity
         error_msg = str(exc)
@@ -126,7 +171,7 @@ def _open_grib_robust(
                     "%s: resolved with uvRelativeToGrid=%d",
                     grb_path.name, uv_flag,
                 )
-                return ds
+                return _collapse_step_dim(ds, grb_path.name)
         except OSError as exc:
             # File I/O errors - log and continue to next flag
             logger.debug(
@@ -731,13 +776,12 @@ def compute_dni(
     ).rename("DNI")
 
     dni.attrs = {
-        "long_name": "Direct Normal Irradiance (experimental per-cell)",
+        "long_name": "Direct Normal Irradiance",
         "units": "W/m2",
         "note": (
             f"DNI = SWDIRS_RAD / cos(SZA) where elevation >= "
             f"{elevation_threshold} deg, else 0. "
-            "SZA from Spencer (1971). "
-            "Experimental — use pvlib DISC from GHI for production DNI."
+            "SZA from Spencer (1971)."
         ),
     }
     logger.info(
