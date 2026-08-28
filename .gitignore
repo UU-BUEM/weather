@@ -101,3 +101,17 @@ src/weather/providers/main.py
 # future changes from being committed, it doesn't rewrite history.
 CLAUDE.md
 .claude/
+# Local operational / correspondence material -- NOT project documentation.
+# This repository is PUBLIC, so anything naming internal hosts, ports, IPs
+# or access arrangements must not be committed here. Keep IT tickets,
+# access requests and similar working material under ops/.
+ops/
+
+# Stray shell artefacts. push.sh/push.ps1 stage with `git add -A`, so an
+# unexpanded variable in a redirect (a shell that did not expand `$LOG`
+# in `> "$LOG"`) silently creates a file with that literal name and
+# sweeps it into the next commit. That is exactly how `$LOG` was
+# committed in fc69f3c.
+[$]*
+nohup.out
+*.tmp

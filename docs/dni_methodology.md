@@ -393,9 +393,44 @@ derivation, at the same cell:
   signature, not a mid-latitude seasonal curve.
 
 Both are consistency-with-physical-law checks, not comparisons against
-an independent measured/satellite product (e.g. a pyranometer station
-or a product like CAMS/SARAH) — that would need external data this
-repo doesn't currently have access to; ask if you want that explored.
+an independent measured/satellite product.
+
+### 11.3 Pyranometer validation against KNMI (2026-08-24)
+
+The gap noted above is now partly closed. COSMO-REA6 GHI for 2018 was
+compared against four KNMI stations, using the free KNMI open-data
+hourly API (`https://www.daggegevens.knmi.nl/klimatologie/uurgegevens`,
+`vars=Q:T:U`; no key required). KNMI's `Q` is J/cm2 per hour division,
+and its hour divisions are hour-ending in UT — the same convention
+COSMO uses — so the two series align with no time shift.
+
+| station          | dist   | COSMO | KNMI | GHI bias | r      |
+|------------------|--------|-------|------|----------|--------|
+| 240 Schiphol     | 1.9 km | 1058  | 1153 | -8.23 %  | 0.9248 |
+| 260 De Bilt      | 2.6 km | 1049  | 1137 | -7.75 %  | 0.9319 |
+| 344 Rotterdam    | 3.3 km | 1072  | 1156 | -7.29 %  | 0.9252 |
+| 280 Eelde        | 2.2 km |  999  | 1114 | -10.33 % | 0.9267 |
+
+(annual GHI, kWh/m2/yr.) Temperature validates far better than
+radiation: bias -0.22 to +0.06 degC, r 0.978-0.989.
+
+The GHI deficit is a genuine model bias, not a pipeline defect. Binning
+by clear-sky index shows it reverses sign with cloud cover — overcast
++10.5 %, broken -6.5 %, hazy -13.7 %, clear -14.2 % — which a units or
+scaling error could not produce. Rectangle and trapezoidal annual sums
+agree to the printed digit (both series endpoints are night), so it is
+not an integration artefact either.
+
+The same comparison confirms that `SWDIRS_RAD`/`SWDIFDS_RAD`, and hence
+`GHI`/`DHI`/`DNI`, are **instantaneous values at the timestamp, not
+hourly means** — matching `downloaded_attributes.py`'s declaration.
+Compared against the KNMI hour-mean the correlation is 0.8767 with a
+debiased RMSE of 113.8 W/m2; compared against the instantaneous value at
+the stamp (estimated as the mean of the two adjacent KNMI hour-means) it
+is 0.9026 and 99.7 W/m2, and the normalised diurnal shape error halves
+(0.0164 vs 0.0328). Consumers integrating sub-daily profiles should use
+the trapezoidal rule rather than treating each value as an hour-mean;
+annual totals are unaffected.
 
 ## 12. References
 
