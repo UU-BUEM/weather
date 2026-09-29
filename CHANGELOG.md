@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.10.0] - 2026-09-29
+
+Includes everything under the 1.9.3 heading below, which was documented
+but never tagged.
+
 ### Added
 
 - **CF metadata layer shared by all three providers**
