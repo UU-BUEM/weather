@@ -190,6 +190,16 @@ whatever schema the archive carries (COSMO: `T`, `GHI`, `DHI`, `DNI`,
   particularly at P10/P90, where the target level is interpolated from
   only two or three bracketing years.  Interpret the tails with
   caution; ERA5-Land's 76-year archive is correspondingly tighter.
+- **Read parallelism on network storage:** the load phase reads every
+  monthly file in parallel, and on NFS more readers is not faster.
+  The ERA5-Land production run on `sd26` used `ERA5_NCORES=32`, which
+  ran far better than the default of one worker per CPU (96) without
+  overloading the mount. ERA5-Land and MERRA-2 take the worker count
+  from `ERA5_NCORES` / `MERRA_NCORES`; COSMO-REA6's script entry point
+  is fixed at 94 read workers (`n_cpu_cores`), and its mosaic phase
+  runs only 2 workers (`n_mosaic_workers`), each pulling up to 24
+  source files of ~4 GB from NFS; the 2026-08 run held ~460 GB
+  resident and took 11.5 h for all 36 files.
 - **GHI-only ranking:** Cells with uniformly low GHI (heavily clouded)
   may show inconsistent temperature or wind rankings relative to the
   selected P-level.  Multi-variable ranking is a planned extension.
