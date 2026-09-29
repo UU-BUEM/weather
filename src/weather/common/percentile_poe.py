@@ -1,5 +1,14 @@
 """Probability-of-Exceedance (PoE) representative-month selection.
 
+.. warning::
+   **Unused / not the production convention.**  No module imports this
+   file.  The production percentile mosaics
+   (``providers/*/percentile_index.py``) use the plain *ascending*
+   convention -- ``P10`` = 10th percentile = LOW-GHI (cloudy) month,
+   ``P90`` = HIGH-GHI (sunny) month -- which is the OPPOSITE of the
+   bankability PoE naming below.  Do not mix the two when reporting
+   results; see ``docs/percentile_methodology.md``.
+
 Convention
 ----------
 In solar bankability assessments (IEC 61724-1, ASTM E2848) ``P_X`` denotes
@@ -32,7 +41,7 @@ For each calendar month ``m`` and each spatial cell ``(i, j)``:
    (argmin absolute distance).
 
 Different cells in the same output month may be drawn from different
-source years.  The ``source_year(rlat, rlon)`` variable in each output
+source years.  The ``source_year(y, x)`` variable in each output
 file records the provenance.
 
 Note: this module implements GHI-only eCDF ranking.  A full

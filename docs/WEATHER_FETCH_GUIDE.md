@@ -85,10 +85,17 @@ multi_year}.py`. `--month` accepts `1`-`12`.
 ### `--ncores N`
 
 Worker count, passed straight through to `run_pipeline(ncores=...)`. Defaults to
-`None`, which lets each provider's own `run_pipeline()`/`EnvSettings` resolve its
-usual default (94 for COSMO's CPU-bound decompress+transform, 6 for ERA5-Land's
-I/O-bound CDS downloads, 8 for MERRA-2's I/O-bound OPeNDAP downloads — see the
-"Providers at a glance" table in the repo's `CLAUDE.md`).
+`None`, which lets each provider resolve it from `COSMO_NCORES`/`ERA5_NCORES`/
+`MERRA_NCORES`, then `SLURM_CPUS_PER_TASK`, then a built-in fallback (4 for COSMO,
+`os.cpu_count()` for the other two).
+
+What it controls differs by provider — see
+[parallelization.md §2](parallelization.md). In particular, for **cosmo-rea6** it
+is also the number of simultaneous DWD download connections: keep it around 12
+(`--ncores 90` caused a storm of DWD 503 errors). The COSMO transform uses dask's
+own thread pool regardless. For era5-land and merra-2 it is the number of
+transform processes (useful up to 12, one per month); their download concurrency
+has separate knobs (`ERA5_CDS_MAX_CONCURRENT`, `MERRA2_OPENDAP_MAX_CONCURRENT`).
 
 ### `--work-dir DIR`
 

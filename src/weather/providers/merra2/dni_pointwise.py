@@ -1,7 +1,7 @@
 """Point- / region-wise DNI and DHI extraction for MERRA-2.
 
 MERRA-2 stores only total shortwave (``GHI``, direct from the
-instantaneous ``SWGDN`` field — no de-accumulation needed, unlike
+hourly-mean ``SWGDN`` field — no de-accumulation needed, unlike
 ERA5-Land's ``ssrd``).  Splitting it into Direct Normal Irradiance (DNI)
 and Diffuse Horizontal Irradiance (DHI) requires a *decomposition
 model* — and every such model carries real estimation uncertainty

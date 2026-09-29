@@ -1,6 +1,7 @@
-# COSMO-REA6 Pipeline — Debugging Guide
+# Weather Pipeline — Debugging Guide
 
 Common errors encountered when running the pipeline, with causes and fixes.
+Most entries come from COSMO-REA6 runs; provider-specific ones say so.
 
 ---
 
@@ -90,10 +91,10 @@ requests a file lock on open, which fails or hangs on these file systems.
 export HDF5_USE_FILE_LOCKING=FALSE
 ```
 
-This is already set automatically in:
+This is already set automatically (at module import) in:
 
-- `test_cosmo_one_year.py` (`os.environ.setdefault(...)` at module level)
-- `test_percentile.py` (same)
+- every provider's `pipeline.py`, `export.py` and `percentile_index.py`
+- `common/metadata_repair.py`
 - `infrastructure/container/Dockerfile` (`ENV HDF5_USE_FILE_LOCKING=FALSE`)
 
 If you run scripts in a way that bypasses these files (e.g., importing
@@ -136,17 +137,39 @@ merge — there is currently no h5py-based fallback path to reach for.
 
 ## 5. Download errors
 
+### Storm of `503 Service Temporarily Unavailable` from DWD (COSMO-REA6)
+
+**Symptom:** Phase 1 logs many `503` responses and retries; downloads crawl
+or fail after `COSMO_MAX_RETRIES` (default 10).
+
+**Cause:** Too many simultaneous connections. COSMO's `--ncores` is also
+the number of parallel download threads (and HEAD-verify threads), so
+`--ncores 90` opens ~90 connections to `opendata.dwd.de` at once. This is
+exactly what happened in the 2026-08 archive rebuild on `sd26`.
+`--parallel-years` does not help — the total is still ≈ `--ncores`.
+
+**Fix:** Stop the run and relaunch with a small `--ncores` (12 worked for
+the full 1995–2019 rebuild). Transform speed is unaffected because dask
+does not use `--ncores` (see [parallelization.md §3–4](parallelization.md)).
+
+```bash
+python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 12 --resume
+```
+
+Already-complete downloads are skipped (size checked against DWD's
+`Content-Length`), and exports are atomic, so restarting mid-run is safe.
+
 ### `ConnectionError` / `requests.exceptions.ReadTimeout`
 
 **Cause:** DWD OpenData server is temporarily unavailable, or the HPC network
 has rate limiting or firewall rules blocking outbound HTTPS to DWD.
 
-**Fix:**
+**Fix:** Re-run the same command with `--resume`; completed downloads and
+months are skipped:
 
 ```bash
-# Re-run with --skip-decompress --resume to retry only failed downloads:
 python src/weather/tests/test_cosmo_one_year.py \
-    --year 2018 --ncores 94 --resume
+    --year 2018 --ncores 12 --resume
 ```
 
 The download function uses atomic rename — a partial download leaves no
@@ -160,7 +183,7 @@ corrupt file, so re-running is always safe.
 
 ```bash
 find /data/download -name "*.grb.bz2" -size 0 -delete
-python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 94 --resume
+python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 12 --resume
 ```
 
 ---
@@ -187,7 +210,7 @@ checksum mismatch).
 # Delete the bad bz2 and grb files, then re-run:
 rm /data/download/T_2M/T_2M.2D.201801.grb.bz2
 rm /data/decompress/T_2M/T_2M.2D.201801.grb
-python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 94 --resume
+python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 12 --resume
 ```
 
 ---
@@ -196,26 +219,28 @@ python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 94 --resume
 
 ### `MemoryError` or process killed (SIGKILL) during Phase 3
 
-**Cause:** Peak RAM per month is approximately `ncores × 0.5 GB`.  At 94
-workers this is ~47 GB.  If the node has less RAM, or is shared with other
-jobs, the OOM killer terminates the process.
+**Cause:** A full-domain COSMO month peaks at roughly 30–45 GB (the
+computed output dataset plus dask chunks in flight). The number of dask
+threads — **not** `--ncores` — sets how many chunks are in flight, and it
+defaults to every visible CPU. `--parallel-years P` multiplies the peak
+by P. On a smaller or shared node the OOM killer terminates the process.
 
 **Fix options:**
 
-1. Reduce `--ncores`:
+1. Cap dask's thread pool (lowering `--ncores` does **not** do this):
 
    ```bash
-   python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 48
+   export DASK_NUM_WORKERS=24
+   python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 12
    ```
 
-2. Add a SLURM memory limit that reserves enough headroom:
+2. Use `--parallel-years 1` (the default) for COSMO.
 
-   ```bash
-   #SBATCH --mem=60G
-   #SBATCH --cpus-per-task=94
-   ```
+3. Scope the run to a country or bbox (`weather fetch --country NL ...`):
+   COSMO crops before transform, so memory scales with the area.
 
-3. For a shared node, use `--ncores $(( $(nproc) / 2 ))`.
+4. Under SLURM, request enough memory, e.g. `#SBATCH --mem=64G` per
+   concurrently processed year (or `--mem=0` on a dedicated node).
 
 See [parallelization.md §6](parallelization.md#6-memory-footprint) for the
 full memory formula.
@@ -231,12 +256,12 @@ is reached.
 
 ```bash
 python src/weather/tests/test_cosmo_multi_year.py \
-    --from-year 1995 --to-year 2027 \
-    --ncores 94 --resume
+    --from-year 1995 --to-year 2019 \
+    --ncores 12 --resume
 ```
 
-All completed monthly `.nc` files are detected automatically; only
-incomplete years are reprocessed.
+Years whose 12 monthly `.nc` files all exist are skipped; within a
+partially done year, `--resume` skips the months already written.
 
 ---
 

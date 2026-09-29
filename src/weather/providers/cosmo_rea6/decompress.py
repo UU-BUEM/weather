@@ -109,12 +109,14 @@ def decompress_all(
     months : list[int], optional
         Months to decompress (default: all 12).
     threads : int, optional
-        bzip2 threads per decompress job (default: config
-        ``threads_per_job``, normally 1 -- see *max_workers* below).
+        lbzip2/pbzip2 threads per decompress job (default: config
+        ``threads_per_job`` = ``COSMO_THREADS_PER_JOB``, default 4;
+        ignored by the Python ``bz2`` fallback).
     max_workers : int, optional
-        Concurrent decompress jobs (default: ``min(n_tasks, ncores)``,
-        i.e. one job per core when ``threads_per_job=1``; lower this if
-        *threads* > 1 to avoid oversubscription).
+        Concurrent decompress jobs (default: ``min(n_tasks, ncores)``).
+        Total OS threads ~= ``max_workers * threads``: 12 x 4 = 48 is
+        fine on ``sd26``; at ``ncores`` ~94 use ``threads=1`` to avoid
+        oversubscription.
 
     Returns
     -------

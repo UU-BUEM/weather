@@ -182,8 +182,8 @@ def _build_month_mosaic(args: tuple) -> str:
 
     Design
     ------
-    The KS phase identifies the best source year per grid cell using
-    GHI only.  The mosaic phase then copies **all variables** from that
+    The selection phase identifies the best source year per grid cell
+    and month using GHI only.  The mosaic phase then copies **all variables** from that
     winning year into the output — GHI is not special here, every
     variable in the source file is carried across.
 
@@ -600,10 +600,13 @@ class Era5LandPercentileIndexer:
        using up to ``n_cpu_cores`` workers, extract day-summed GHI, and
        organise results by month and year.
 
-    2. **KS match** (``_compute_ks_for_month``): for each of the 12
-       months, find the year whose empirical GHI distribution best
-       matches the pooled P10, P50, and P90 thresholds via minimum
-       Kolmogorov-Smirnov distance.  Runs in pure vectorised numpy.
+    2. **Select** (``_compute_ks_for_month`` -- historical name): for
+       each of the 12 months and every cell, total each year's daily GHI
+       and pick the year nearest the 10th/50th/90th percentile of those
+       totals across years.  Runs in pure vectorised numpy.  (Until
+       2026-08-19 this was a pooled-threshold KS-distance rule that
+       never delivered the requested P-levels -- see
+       ``docs/percentile_methodology.md`` section 3.2.1.)
 
     3. **Mosaic** (``construct_and_save_mosaics``): for each month and
        percentile, assemble the best-year hourly data into a spatial
@@ -778,7 +781,9 @@ class Era5LandPercentileIndexer:
         return monthly_registry, file_path_lookup
 
     # ------------------------------------------------------------------
-    # Phase 2: KS distribution matching
+    # Phase 2: representative-year selection (cumulative monthly GHI rank;
+    # the "_ks" method name is historical -- the KS rule was replaced
+    # 2026-08-19, see docs/percentile_methodology.md section 3.2.1)
     # ------------------------------------------------------------------
 
     def _compute_ks_for_month(
@@ -786,7 +791,7 @@ class Era5LandPercentileIndexer:
         month: int,
         monthly_registry: dict,
     ) -> dict:
-        """Run KS distribution matching for one month.
+        """Select the P10/P50/P90 source year per cell for one month.
 
         For each grid cell, totals that year's daily GHI sums and
         selects the year sitting nearest the 10th, 50th and 90th

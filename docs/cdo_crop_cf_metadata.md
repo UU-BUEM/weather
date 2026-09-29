@@ -137,11 +137,15 @@ Results:
 | COSMO-REA6 |   298 |     284 |                     14 |      0 |
 | MERRA-2    |   552 |     540 |                     12 |      0 |
 
-ERA5-Land's existing archive has **not** yet been patched (its bulk
-pipeline run was active in a separate session at the time this fix
-landed — intentionally left untouched). New ERA5-Land exports already
-get the fix automatically; the existing archive needs the same
-retroactive pass once that run finishes.
+ERA5-Land's archive was **not** part of this pass (its bulk run was
+still active at the time). Files exported after the fix landed carry the
+attributes; earlier ones may not. The later archive-wide
+`common/metadata_repair.py` pass (2026-08-26, all three providers)
+repairs global attributes and data-variable `standard_name`s — it does
+not touch the `latitude`/`longitude` coordinate attributes this document
+is about. Before running `weather geo crop` on an ERA5-Land file, check
+`ncdump -h <file> | grep -A3 "latitude("`; if `standard_name`/`units`
+are missing, apply the same metadata-only patch described above.
 
 ## Scope note: `weather fetch --country`/`--bbox` vs. `weather geo crop`
 

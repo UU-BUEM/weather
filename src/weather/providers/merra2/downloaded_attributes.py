@@ -149,7 +149,7 @@ ATTRIBUTES: dict[str, dict[str, str]] = {
         "unit_target": "W/m^2",
         "conversion": (
             "none (already in Watts per square meter (W/m^2); "
-            "instantaneous, unlike ERA5-Land's accumulated ssrd — "
+            "hourly-mean rate, unlike ERA5-Land's accumulated ssrd — "
             "no de-accumulation needed)"
         ),
     },

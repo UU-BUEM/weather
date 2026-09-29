@@ -1,566 +1,315 @@
-# COSMO-REA6 Pipeline Parallelization and Performance
+# Parallelization, Core Counts and Performance
 
-This document describes the parallelization strategy used by both the
-monthly (`test_cosmo_one_month.py`) and annual (`test_cosmo_one_year.py`) pipeline
-scripts for processing COSMO-REA6 data on a multi-core HPC node.
+How each provider's pipeline uses cores, what `--ncores` actually controls,
+and how to size a run on `sd26` (94 cores, 1 TB RAM). COSMO-REA6 gets the
+most detail because it is the only provider whose download fan-out is tied
+to `--ncores`, and the only one that is CPU-heavy.
 
 For the DNI-specific vectorization over the spatial grid using the Spencer
 solar-position formula see [dni_methodology.md](dni_methodology.md) §3.
 
 ---
 
-## 1. Pipeline stages and their parallelism type
+## 1. TL;DR — recommended settings
 
-Each run processes 9 attributes per month through four stages:
+| Provider   | Recommended                               | Why                                                       |
+| ---------- | ----------------------------------------- | --------------------------------------------------------- |
+| COSMO-REA6 | `--ncores 12`, `--parallel-years 1`       | `--ncores` = simultaneous DWD connections; 90 caused 503s |
+| ERA5-Land  | `--ncores 6`, `ERA5_CDS_MAX_CONCURRENT=1` | CDS queue is the bottleneck (1 active job per account)    |
+| MERRA-2    | `--ncores 12 x parallel-years`            | transform is capped at 12 months per year; rest is idle   |
 
-```text
-  ┌─────────────┐   ThreadPoolExecutor   ┌──────────────────┐
-  │  Download   │ ──── 9 threads ──────► │  .grb.bz2 files  │
-  │  (I/O-bound)│       per month        │  (on disk)       │
-  └─────────────┘                        └────────┬─────────┘
-                                                  │
-  ┌─────────────┐   ProcessPoolExecutor           │
-  │ Decompress  │ ◄─── 9 processes ──────────────┘
-  │  (CPU-bound)│    submitted as each            │
-  └─────────────┘    download completes           │
-                     (producer-consumer)           │
-                                                   ▼
-  ┌─────────────┐   Dask threaded scheduler   ┌──────────────┐
-  │  Transform  │ ──── ncores workers ──────► │  in-memory   │
-  │  (CPU-bound)│    (80 on HPC node)         │  xr.Dataset  │
-  └─────────────┘                             └──────┬───────┘
-                                                     │
-  ┌─────────────┐   Dask threaded + zlib             │
-  │   Export    │ ◄────────────────────────────────┘
-  │  (I/O+CPU)  │    same thread pool, float32
-  └─────────────┘    compression level 1
-```
-
-### Worker counts — monthly script (9 attributes, 80 cores)
-
-| Stage | Workers | Type | Hard ceiling | Reason |
-| --- | --- | --- | --- | --- |
-| Download | 9 | `ThreadPoolExecutor` | # attributes | Network I/O-bound |
-| Decompress | 9 | `ProcessPoolExecutor` | # attributes | One bz2 per attribute |
-| Transform | 80 | Dask threaded | `ncores` | CPU-bound arithmetic |
-| Export | 80 | Dask threaded | `ncores` | Dask `.compute()` + zlib |
-
-Download and decompress are hard-limited to 9 workers (one per attribute)
-regardless of how many cores are allocated. Since they complete before
-transform begins, all `ncores` (80 in this example) are devoted to the
-dask transform and export stages.
-
-### Worker counts — annual script (108 tasks, 96 cores)
-
-The annual script treats all 12 months × 9 attributes = **108 tasks** as
-independent, removing the per-month ceiling:
-
-| Phase | Workers | Type | Hard ceiling | Reason |
-| --- | --- | --- | --- | --- |
-| Phase 1 — Download | 96 | `ThreadPoolExecutor` | min(108, ncores) | All month-attr pairs independent |
-| DWD size check | 94 | `ThreadPoolExecutor` (sequential, after Phase 2) | min(108, ncores) | Network I/O; runs after ProcessPoolExecutor exits to avoid fork+thread deadlock |
-| Phase 2 — Decompress | 96 | `ProcessPoolExecutor` | min(108, ncores) | All month-attr pairs independent |
-| Phase 2 verify | — | Sequential | — | Local stat() + 4-byte GRIB magic; < 100 ms |
-| Phase 3 — Transform | 96 | Dask threaded | `ncores` | Per-month, CPU-bound |
-| Phase 3 — Export | 96 | Dask threaded | `ncores` | Per-month, I/O + CPU |
-
-The DWD size check and Phase 2 decompression use completely different
-resources (network I/O threads vs CPU-bound processes) and therefore run
-simultaneously at no cost to either.
+**Do not run COSMO-REA6 with `--ncores 80`/`90`/`94`.** Older versions of
+this document and several script docstrings used those values because
+`--ncores` was assumed to be a pure CPU budget. It is not — see §3.
 
 ---
 
-## 2. Download + Decompress: producer-consumer pattern (monthly script)
+## 2. What `--ncores` controls, per provider
 
-The monthly script (`test_cosmo_one_month.py`) uses a **producer-consumer** pattern
-that overlaps downloading and decompression so the process pool is never idle:
+| Provider   | Download concurrency                       | Decompress                     | Transform + export                   |
+| ---------- | ------------------------------------------ | ------------------------------ | ------------------------------------ |
+| COSMO-REA6 | **`min(tasks, ncores)` HTTPS threads**     | `min(tasks, ncores)` processes | dask threads — **not** `ncores` (§4) |
+| ERA5-Land  | `ERA5_CDS_MAX_CONCURRENT` (CDS jobs)       | —                              | `min(ncores, months)` processes      |
+| MERRA-2    | `MERRA2_OPENDAP_MAX_CONCURRENT` (per year) | —                              | `min(ncores, months)` processes      |
 
-```python
-with ProcessPoolExecutor(max_workers=dc_workers) as dc_pool:   # outer
-    with ThreadPoolExecutor(max_workers=dl_workers) as dl_pool: # inner
-        for attr in attrs:
-            dl_futures[dl_pool.submit(download, attr)] = attr
+`tasks` for COSMO is `months x attributes` — 12 x 11 = **132** for a full
+year (11 raw attributes in `downloaded_attributes.py`: `H_SNOW`, `PS`,
+`RELHUM_2M`, `SNOW_CON`, `SNOW_GSP`, `SOBS_RAD`, `SWDIFDS_RAD`,
+`SWDIRS_RAD`, `T_2M`, `U_10M`, `V_10M`).
 
-        for dl_fut in as_completed(dl_futures):
-            bz2_path = dl_fut.result()          # blocks only for this attr
-            dc_pool.submit(decompress, bz2_path) # starts immediately
-```
+Defaults when neither `--ncores` nor an env var is set: COSMO `4`
+(`COSMO_NCORES` → `SLURM_CPUS_PER_TASK` → 4); ERA5-Land and MERRA-2
+`os.cpu_count()` (`ERA5_NCORES`/`MERRA_NCORES` → `SLURM_CPUS_PER_TASK` →
+`os.cpu_count()`).
 
-Worker budget allocation (`ncores = 80`, `n = 9`):
-
-```text
-dl_workers = min(n, max(1, ncores // 2))   = min(9, 40) = 9
-dc_workers = min(n, max(1, ncores - dl_workers)) = min(9, 71) = 9
-```
-
-The `ncores // 2` heuristic reserves half the budget for each pool; both
-are capped at `n` so the split only matters when `ncores < 2 * n_attrs`.
+The multi-year scripts (`test_<provider>_multi_year.py`) give each year
+`ncores // parallel_years`, and run each year as its own subprocess.
 
 ---
 
-## 3. Annual pipeline: bulk parallel phases
+## 3. Why high `--ncores` breaks COSMO-REA6
 
-`providers/cosmo_rea6/pipeline.py::run_pipeline()` (called by the thin
-`test_cosmo_one_year.py`/`test_cosmo_one_month.py` CLI wrappers, matching
-ERA5-Land/MERRA-2's pattern) exploits a key fact: **all 12 months × 9
-attributes = 108 download tasks are completely independent**, and so are
-all 108 decompress tasks. It therefore processes them in two bulk phases
-before any transform work begins.
-
-Full execution flow with integrity checks:
+`providers/cosmo_rea6/pipeline.py` uses one number, `ncores`, for three
+different resources:
 
 ```text
-Phase 1 — Bulk download (all 108 bz2 files)
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │  ThreadPoolExecutor(min(108, ncores))                               │
-  │  month 01 × 9 attrs ──────────────────────────────────────────────►│
-  │  month 02 × 9 attrs ──────────────────────────────────────────────►│
-  │  ...                                                               │
-  │  month 12 × 9 attrs ──────────────────────────────────────────────►│
-  │  [CHECK A] size > 0 per file, inline as each future completes      │
-  └─────────────────────────────────────────────────────────────────────┘
-  Wall time ≈ 3–4 min (observed on HPC with 94 threads)
-       │
-       ▼
-Phase 2 — Bulk decompress (all 108 .grb files)
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │  ProcessPoolExecutor(min(108, ncores))                               │
-  │  Round 1: 94 tasks in parallel ───────────────────────────────────►│
-  │  Round 2: 14 remaining tasks ─────────────────────────────────────►│
-  │  Each task logs start AND completion at INFO level                   │
-  └─────────────────────────────────────────────────────────────────────┘
-       │
-       ▼
-  [CHECK C] decompress.verify_decompressed() — sequential, all local disk
-            stat() + size-expansion check + 4-byte GRIB magic
-            108 files; expected wall time: < 100 ms
-       │
-       ▼
-  [CHECK B] download.verify_downloads() — sequential, after ProcessPoolExecutor exits
-            94 parallel HEAD requests to DWD (I/O-bound)
-            compares local bz2 size to Content-Length header
-            Must run BEFORE bz2 cleanup so local files still exist
-            Expected wall time: 1–5 s (2 batches × 94 requests @ <150 ms RTT)
-            Worst case (30 s timeout per request): 2 × 30 s = 60 s
-       │
-       ▼
-  bz2 cleanup (gated on CHECK B + CHECK C both passing)
-       │
-       ▼
-Phase 3 — Transform + Export (sequential per month)
-  month 01 → [Open GRIBs] → [Transform] → [Export NetCDF] → [cleanup grb]
-  month 02 → [Open GRIBs] → [Transform] → [Export NetCDF] → [cleanup grb]
-  ...
-  month 12 → [Open GRIBs] → [Transform] → [Export NetCDF] → [cleanup grb]
-  Wall time ≈ 12 × 149 s = 1788 s
-       │
-       ▼
-  Output: 12 monthly files per year
-  COSMO_REA6_YYYY_01_all_attrs.nc … COSMO_REA6_YYYY_12_all_attrs.nc
-  No annual merge step required — test_percentile.py reads monthly files
-  directly via xr.open_mfdataset.
+Phase 1 download         ThreadPoolExecutor(min(132, ncores))   → DWD HTTPS
+Phase 1 verify           ThreadPoolExecutor(min(132, ncores))   → DWD HEAD requests
+Phase 2 decompress       ProcessPoolExecutor(min(132, ncores))  → local CPU
 ```
 
-### 3.1 Why each check is placed where it is
+At `--ncores 90` that is ~90 simultaneous connections to
+`opendata.dwd.de` from one IP. In the 2026-08 production rebuild on
+`sd26` this produced a storm of `503 Service Temporarily Unavailable`
+responses; retries (`COSMO_MAX_RETRIES`, default 10) just re-hit the
+overloaded server. The run was relaunched at `--ncores 12` and completed.
 
-| Check | Where | What | Why there |
-| --- | --- | --- | --- |
-| A — `size > 0` | Inline in Phase 1 future loop | Each `.grb.bz2 > 0 B` immediately on thread completion | `download_https_atomic` uses atomic rename; a non-empty file was fully written |
-| B — DWD `Content-Length` | Sequential, after Phase 2 `ProcessPoolExecutor` exits | 94 parallel HEAD requests: local size == server `Content-Length` | Must run **after** the `ProcessPoolExecutor` exits to avoid the Linux fork-after-thread deadlock; must run **before** bz2 cleanup so local files still exist to be stat()'d |
-| C — GRIB magic | Sequential, after Phase 2 | `stat()` + size expansion + `b"GRIB"` header bytes | Local disk only, < 100 ms; gates bz2 deletion so corrupt decompression is caught before source files are removed |
+`--parallel-years` does not help: each year gets `ncores // P` download
+threads, so the total number of DWD connections is still ≈ `ncores`.
 
-**Why sequential in Phase 3?**  The bottleneck is CPU, not RAM.
-Dask already saturates all `ncores` threads *within* one month's transform.
-Running *k* months in parallel would give each month only `ncores/k` dask
-workers — each month would take *k*× longer, so total wall time is unchanged
-(or worse, due to dask-scheduler contention across concurrent graphs).
-Months are therefore kept sequential so each month benefits from the full
-core budget.
+Throughput is not lost at 12, because:
+
+- the transform phase — the dominant cost — is **not** limited by
+  `ncores` (§4), so it still uses every core;
+- DWD is the download bottleneck, not local threads;
+- 12 decompress processes x `COSMO_THREADS_PER_JOB=4` lbzip2 threads ≈ 48
+  threads, which keeps decompression well fed.
+
+There is no separate download-concurrency knob for COSMO today (ERA5-Land
+and MERRA-2 have one). Until there is, keep `--ncores` ≤ ~16 for any run
+that downloads from DWD. A run with `--skip-download` can use more (for
+decompression), but gains little.
 
 ---
 
-### 3.2 Interrupted runs: skip-if-done and `--resume`
+## 4. Transform: dask worker count is NOT set by `--ncores`
 
-Each phase has an independent skip-if-done check, so a re-run after an
-interrupted pipeline is always faster than a cold start:
+`run_pipeline()` transforms months sequentially with lazy dask arrays.
+It never calls `dask.config.set(num_workers=...)` — the only COSMO call
+that does is in `transform.build_annual_dataset()`, which the pipeline
+does not use. (The old monolithic `test_cosmo_one_year.py` set it; that
+was lost when the pipeline moved into the provider package.) So dask's
+threaded scheduler uses its default pool: **one thread per visible CPU**
+(94 on `sd26`), regardless of `--ncores`.
 
-| Phase | Skip condition | Who checks |
-| --- | --- | --- |
-| Phase 1 download | `.grb.bz2` exists **and** local size == DWD `Content-Length` | `download_https_atomic` — automatic, no flag needed |
-| Phase 2 decompress | `.grb` exists **and** size > 0 | `decompress_bz2_file` — automatic, no flag needed |
-| Phase 3 transform | output `.nc` exists | `--resume` flag — **must be passed explicitly** |
+Consequences:
 
-**What `--resume` does** (and does not do):
+- `--ncores 12` does not slow the transform down (good, see §3).
+- Lowering `--ncores` does **not** reduce transform memory.
+- `--parallel-years P` runs P transforms at once, each with a 94-thread
+  pool: CPU is oversubscribed P-fold and memory is P x one month's peak.
 
-- Skips the transform + export step for any month whose
-  `COSMO_REA6_YYYY_MM_all_attrs.nc` already exists in the output directory.
-- Phase 1 and Phase 2 still run their skip-if-done checks regardless.
-  If the `.grb` files for skipped months are still on disk,
-  Phase 2 returns instantly for those months.
-
-**Recommended command after an interruption** (e.g. stopped during month 5,
-months 1–4 have `.nc` files, months 5–12 still have `.grb` files on disk,
-but all `.grb.bz2` were already cleaned up after Phase 2):
+To cap dask explicitly, set its own env var (verified against
+`weather_env`'s dask 2026.3):
 
 ```bash
-python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 94 \
+export DASK_NUM_WORKERS=48      # dask threaded scheduler pool size
+```
+
+Use this when running `--parallel-years > 1` (e.g. `94 // P`) or on a
+shared node. Tracked in `.claude/open.md` (`## parallelization`) as a
+code follow-up: the pipeline should set the dask pool itself.
+
+ERA5-Land and MERRA-2 transform months in separate processes
+(`ProcessPoolExecutor`). Their exporters compute each variable before
+`to_netcdf()` (the fix for MERRA-2's dask write-lock deadlock, see
+`MERRA2_PIPELINE_GUIDE.md`), so the same default-dask-pool effect exists
+there but is short-lived and has not caused problems.
+
+---
+
+## 5. COSMO-REA6 pipeline phases
+
+`test_cosmo_one_month.py` and `test_cosmo_one_year.py` are both thin CLI
+wrappers around `providers/cosmo_rea6/pipeline.py::run_pipeline(year,
+months=...)`; the one-month script is just `months=[m]`. There is no
+separate producer-consumer path any more.
+
+```text
+Phase 1 — Bulk download (all months x 11 attributes)
+  ThreadPoolExecutor(min(tasks, ncores))
+  [CHECK A] size > 0 per file, inline as each download completes
+  [CHECK B] download.verify_downloads(): HEAD request per file,
+            local size == DWD Content-Length
+       │
+       ▼
+Phase 2 — Bulk decompress (all .grb.bz2 -> .grb)
+  ProcessPoolExecutor(min(tasks, ncores)), lbzip2/pbzip2/python-bz2
+  [CHECK C] decompress.verify_decompressed(): stat() + size expansion
+            + 4-byte GRIB magic, local disk only
+  CLEANUP A (only with --cleanup): delete this run's .grb.bz2
+       │
+       ▼
+(opt.) Crop — only with a bbox (weather fetch --country/--bbox);
+             crops each GRIB to the bbox's (y, x) window. No-op otherwise.
+       │
+       ▼
+Phase 3 — Transform + Export, sequential per month
+  month 01 → build_month_dataset → export_netcdf → DNI outlier report
+           → CLEANUP B (only with --cleanup): this month's .grb/.idx/.lock
+  month 02 → ...
+  Output: COSMO_REA6_<YYYY>_<MM>_all_attrs.nc
+```
+
+**Why months are sequential in Phase 3.** Dask already saturates all
+cores within one month. Running *k* months at once gives each ~1/*k* of
+the cores (no gain) and multiplies peak memory by *k*.
+
+**Where CHECK B runs.** `verify_downloads()` runs at the end of Phase 1,
+after the download thread pool has shut down and before Phase 2 starts
+its `ProcessPoolExecutor`, so no HTTP threads are alive when worker
+processes fork (avoiding the Linux fork-after-thread deadlock). It
+also runs before any bz2 cleanup, so the local files still exist to
+compare. (Older builds ran it after Phase 2; the current pipeline does
+not.)
+
+### 5.1 Interrupted runs: skip-if-done and `--resume`
+
+| Phase              | Skip condition                                   | Who checks                  |
+| ------------------ | ------------------------------------------------ | --------------------------- |
+| Phase 1 download   | `.grb.bz2` exists and size == DWD Content-Length | automatic                   |
+| Phase 2 decompress | `.grb` exists and size > 0                       | automatic                   |
+| Phase 3 transform  | output `.nc` exists                              | `--resume` (must be passed) |
+
+With `--resume`, months whose `.nc` exists are also excluded from Phase 1
+and 2, so nothing is re-downloaded for them. Exports are atomic
+(`<name>.nc.tmp` → rename), so an interrupted export never leaves a
+truncated `.nc` that `--resume` would mistake for a finished month.
+
+After an interruption during Phase 3 (bz2 already cleaned up, `.grb`
+still on disk):
+
+```bash
+python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 12 \
     --skip-download --skip-decompress --resume --cleanup
 ```
 
-- `--skip-download` : bypass Phase 1 entirely (bz2 files already cleaned up)
-- `--skip-decompress`: bypass Phase 2 entirely (grb files still on disk)
-- `--resume`        : skip Phase 3 for months whose `.nc` already exists
+### 5.2 Cleanup
 
-This jumps straight to Phase 3 starting at the first unfinished month.
+Cleanup is **off by default** (`COSMO_CLEANUP=false`); pass `--cleanup`
+or set `COSMO_CLEANUP=true`. Every deletion is gated on the preceding
+integrity check passing and uses exact per-month filenames (plus a glob
+for cfgrib's hashed `<grb_name>.<hash>.idx` sidecar), so partial or
+`--resume` runs never delete another month's files. `--skip-download`
+suppresses CLEANUP A and `--skip-decompress` suppresses CLEANUP B.
 
-### 3.3 Cleanup sequence and disk management
+---
 
-Cleanup is split across Phase 2 and the per-month Phase 3 loop.
-All cleanup is **gated on the preceding integrity check passing** —
-a failed check raises `RuntimeError` before any files are deleted,
-keeping source files available for diagnosis or re-run.
+## 6. Transform: dask temporal chunking
+
+GRIBs are opened with `chunks={"time": 168}` (≈ 1 week):
 
 ```text
-Phase 2 — Bulk decompress completes + CHECK C passes
-  └─► CLEANUP A  remove each month's .grb.bz2 from dl_dir  (frees ~12 GB)
-      Scoped to months_to_process × attributes (exact filenames,
-      never a glob — safe with --resume partial runs)
-      Condition: do_dl and cleanup
-
-Phase 3 — per month, after export:
-  [3/3] Export NetCDF (export_netcdf raises on any write failure)
-        │
-        ├─► close all xr.Dataset handles
-        └─► CLEANUP B  remove THIS month's .grb + .idx + .lock from dc_dir
-            Exact filenames, plus a glob for cfgrib's hash-suffixed
-            index sidecar (`<grb_name>.<hash>.idx`, not `<grb_name>.idx`
-            — a real bug found and fixed this session: the plain-name
-            guess never matched, so .idx files were silently orphaned
-            on every cleanup-enabled run). Never touches other months'
-            .grb files (frees ~7 GB per month as each month completes).
-            Condition: do_dc and cleanup
-
-After all months complete:
-  CLEANUP C  rmdir per-attribute subfolders in dl_dir and dc_dir
-             (rmdir silently fails if non-empty — safe with
-             --parallel-years: other years may still hold their files)
-             Condition: cleanup
+Monthly GRIB (e.g. T_2M, January):
+  time: 744 steps → 5 chunks (4 x 168 + 72)
+  y:    824       → single chunk
+  x:    848       → single chunk
 ```
 
-**Peak disk usage** (during Phase 3, just after Phase 2 cleanup):
-
-| Data | Size | Location |
-| --- | --- | --- |
-| All decompressed GRIBs (12 months × 9 attrs) | ~84 GB | `dc_dir` |
-| NetCDF output being written (1 month at a time) | ~2 GB | `out_dir` |
-| **Peak total** | **~86 GB** | |
-
-Once Phase 3 starts consuming months, `dc_dir` shrinks by ~7 GB per month.
-By the time month 12 completes, `dc_dir` is empty and `out_dir` holds the
-12 final NetCDF files (~24 GB).
-
-Both cleanups are gated on the `do_dl` / `do_dc` flags and `--cleanup`
-(a positive flag, matching ERA5-Land/MERRA-2 — this used to be COSMO's
-own negative `--no-cleanup`, renamed for consistency), so
-`--skip-download`, `--skip-decompress`, and omitting `--cleanup` suppress
-the relevant call. All of this logic now lives in
-`providers/cosmo_rea6/pipeline.py::run_pipeline()`, not in the test
-script itself — `test_cosmo_one_year.py`/`test_cosmo_one_month.py` are
-thin CLI wrappers around it, matching ERA5-Land/MERRA-2.
+- **No spatial chunking.** cfgrib reads the whole 824 x 848 field per
+  GRIB message anyway; splitting `(y, x)` would multiply the task graph
+  without reducing I/O.
+- **Fully vectorized.** Every derived field (GHI, DHI, DNI via Spencer,
+  WS_10M, RH, T_DEW, ALBEDO, SNOWFALL) is element-wise NumPy/dask over
+  `(time, y, x)`. NumPy releases the GIL, so dask threads run in
+  parallel. See [dni_methodology.md §3](dni_methodology.md#3-why-not-pvlib-for-gridded-data).
 
 ---
 
-## 4. Transform stage: dask temporal chunking
+## 7. Export: compute, compress, write atomically
 
-`open_grib_month()` opens GRIB files with:
+`export_netcdf()` (all three providers):
 
-```python
-xr.open_dataset(grb_path, engine="cfgrib", chunks={"time": 168})
-```
+1. computes each variable into memory **one at a time** (bounds peak
+   memory and avoids dask's multi-threaded write-lock contention);
+2. attaches CF metadata (`common/cf_conventions.attach_cf_metadata`);
+3. writes float32, zlib `complevel=1` to `<name>.nc.tmp`, then renames.
 
-### Temporal chunking — `chunks={"time": 168}` (≈ 1 week)
-
-A monthly GRIB file has 672–744 hourly timesteps. With chunk size 168,
-each attribute has 4–5 independent dask chunks. Combined with 9 attributes,
-the task graph contains dozens of independent tasks per variable, giving the
-80-thread dask scheduler real parallelism to exploit.
-
-```text
-Monthly GRIB  (e.g. T_2M, January 2018):
-  time: 744 steps  →  ⌈744/168⌉ = 5 chunks  (4 full × 168 = 672, + 1 partial of 72)
-  y:    824                                  (single chunk)
-  x:    848                                  (single chunk)
-```
-
-### Why spatial chunking is NOT applied
-
-- cfgrib reads the full COSMO-REA6 rotated-pole grid (824 × 848) as one
-  spatial tile per timestep. Sub-dividing `(y, x)` would increase the
-  dask task graph quadratically without reducing I/O (cfgrib still reads
-  the full GRIB record).
-- The spatial grid at float32 per time-chunk is only ~470 MB — it fits
-  comfortably in memory and processing it as a single spatial tile avoids
-  chunk-boundary effects in operations like wind speed `√(u² + v²)`.
-
-### Why the Spencer formula is fully parallel
-
-All transform operations (`convert_temperature`, `compute_ghi`, `compute_dhi`,
-`compute_wind_speed`, `compute_dni`) are pure NumPy/Dask element-wise
-operations that broadcast naturally over `(time, y, x)` arrays. No Python
-loops, no GIL contention (NumPy releases the GIL for C-extension arithmetic),
-so all 80 dask threads run simultaneously on different chunks.
-
-See [dni_methodology.md §3](dni_methodology.md#3-why-not-pvlib-for-gridded-data)
-for a detailed comparison with the pvlib loop-based approach.
-
-### Explicit dask worker count
-
-```python
-dask.config.set(num_workers=ncores)   # set once before the month loop
-```
-
-Without this, dask defaults to `os.cpu_count()`. On an HPC node running
-inside a SLURM allocation, `os.cpu_count()` returns the total machine CPUs
-(not the allocated ones), so explicit configuration ensures the right count.
-`settings.cosmo_ncores()` already reads `SLURM_CPUS_PER_TASK` as a fallback,
-so passing `--ncores 80` or setting `COSMO_NCORES=80` is equivalent.
+| Choice                        | Reason                                                              |
+| ----------------------------- | ------------------------------------------------------------------- |
+| `complevel=1`                 | Levels 2–9 save < 5 % more space for ~10x the CPU on large grids    |
+| `float32`                     | Halves file size; 7 significant digits is far beyond model accuracy |
+| `HDF5_USE_FILE_LOCKING=FALSE` | Avoids lock hangs on GPFS/Lustre/NFS; set at module level           |
+| temp file → rename            | An interrupted write never leaves a truncated final file            |
 
 ---
 
-## 5. Export stage: compression and float32
+## 8. Memory footprint (COSMO-REA6)
 
-`export_netcdf()` encodes all data variables as float32 with zlib
-compression level 1:
+Rough figures for one full-domain month (824 x 848, 744 h):
 
-```python
-encoding[var] = {"zlib": True, "complevel": 1, "dtype": "float32"}
-```
+| Item                                          | Size (float32) |
+| --------------------------------------------- | -------------- |
+| One variable, one month                       | ≈ 2.1 GB       |
+| One dask chunk (168 h) of one variable        | ≈ 470 MB       |
+| Output dataset once computed (~13 variables)  | ≈ 25–30 GB     |
+| Observed process peak (2018 run, older build) | ≈ 45 GB        |
 
-| Choice | Reason |
-| --- | --- |
-| `complevel=1` (fastest) | Levels 2–9 give diminishing file-size reduction (< 5%) for 10× more CPU time on large grids |
-| `dtype=float32` | Halves output file size vs float64; instruments have ≈ 0.1 W/m² precision — float32 (7 significant digits) is more than adequate |
-| `HDF5_USE_FILE_LOCKING=FALSE` | Prevents deadlocks on GPFS/Lustre network file systems used on HPC; set at module level in `test_cosmo_one_year.py` and `export.py` |
+The peak scales with the number of dask threads (more chunks in flight)
+and with `--parallel-years` (one month per active year). It does not
+scale with `--ncores` (§4). On `sd26` (1 TB) even
+`--parallel-years 4` is comfortable memory-wise; CPU oversubscription
+(§4) is the tighter limit. For SLURM, request `--mem=0` on a dedicated
+node, or ≥ 64 GB per concurrently processed year.
 
-Dask triggers `.compute()` during `to_netcdf()`, writing chunks concurrently
-with the same 80-thread scheduler used for transform.
+A country-scoped run (`weather fetch --country ...`) crops before
+transform, so memory and time scale with the cropped area instead.
 
 ---
 
-## 6. Memory footprint
+## 9. Throughput
 
-| Item | Size (float32) |
-| --- | --- |
-| One chunk, one attribute: 168 × 824 × 848 | ≈ 470 MB |
-| All 9 attributes, one chunk each | ≈ 4.2 GB |
-| Peak active (4 concurrent chunks × 9 attrs) | ≈ 17 GB |
-| Intermediate operations (add, divide, sqrt) | ≈ 1.5× peak = **25 GB** |
-| Dask task graph overhead | ≤ 5 GB |
-| **Total peak per month (80 workers)** | **≈ 30 GB** |
-| **Total peak per month (94 workers)** | **≈ 45 GB** |
+**Current (2026-08, 11 attributes, `sd26`, `--ncores 12`):** roughly
+~6 min and ~10 GB of GRIB per month end to end, ~9.3 GB NetCDF output per
+month. The full 1995-01..2019-08 archive (296 months) was rebuilt this way.
 
-The per-month peak scales with `ncores` because dask runs more chunks
-concurrently:
+**Historical (2018, 9 attributes, 96-thread build):** ~230 s per month
+(download ~58 s, decompress ~23 s, transform + export ~149 s); a full year
+in ~32 min with bulk download/decompress. Treat these as lower bounds —
+two more raw attributes and more derived output variables have been
+added since, and the 96 download threads used then are what later
+triggered DWD's 503s (§3).
 
-$$\text{Peak RAM} \approx
-  \underbrace{n_{\text{workers}} \times 470\,\text{MB}}_{\text{active chunks}}
-  \times 1.5 + 5\,\text{GB overhead}$$
+Download time depends on DWD's current load far more than on local
+threads. Transform dominates on a fast network.
 
-At 94 workers: 94 × 470 MB × 1.5 + 5 GB ≈ 45 GB per month,
-which matches observed usage.  This is the expected and correct value — it means
-dask is fully utilising all allocated workers.
+---
 
-Only one month is held in memory at a time (Phase 3 is sequential), so
-**45 GB is also the total process peak**, regardless of how many months
-are being processed in the year run.
-
-### SLURM memory allocation
-
-When submitting via SLURM, request at least `ncores × 0.7 GB` to give a
-comfortable margin:
+## 10. Configuration reference
 
 ```bash
-# 94 cores × 0.7 GB/core = 66 GB headroom; round up to next SLURM unit
-  #SBATCH --mem=70G
-# Or, to use the full node's RAM without an explicit limit:
-  #SBATCH --mem=0
+# .env (or CLI flags)
+COSMO_NCORES=12            # download threads, verify threads, decompress
+                           # processes — keep low, see §3
+COSMO_THREADS_PER_JOB=4    # lbzip2/pbzip2 threads per decompress job;
+                           # 12 x 4 ≈ 48 threads. Use 1 if you raise
+                           # COSMO_NCORES for a --skip-download run.
+COSMO_MAX_RETRIES=10       # per-file download retries
+COSMO_CLEANUP=false        # keep intermediates by default
+DASK_NUM_WORKERS=94        # optional: cap the transform's dask pool (§4)
+
+python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 12 --resume
 ```
 
-On a dedicated 782 GB node the margin is ~17× and `--mem=0` (use all
-available) is safe.
+### 10.1 `COSMO_THREADS_PER_JOB` and oversubscription
+
+| Decompressor        | `COSMO_THREADS_PER_JOB` | OS threads at `ncores=12` | OS threads at `ncores=94` |
+| ------------------- | ----------------------- | ------------------------- | ------------------------- |
+| Python `bz2`        | ignored                 | 12                        | 94                        |
+| `lbzip2` / `pbzip2` | 4 (default)             | 48 — fine                 | 376 — oversubscribed      |
+| `lbzip2` / `pbzip2` | 1                       | 12 — under-used           | 94 — correct              |
+
+`lbzip2`/`pbzip2` have no win-64 conda-forge build; Windows always falls
+back to Python `bz2` (see [debugging.md §2](debugging.md)).
 
 ---
 
-## 7. Monthly vs annual comparison
+## 11. Related documentation
 
-| Feature | `test_cosmo_one_month.py` | `test_cosmo_one_year.py` |
-| --- | --- | --- |
-| Download+decompress | Producer-consumer (9+9 workers) | Bulk parallel: min(108, ncores) |
-| Inline download check | `size > 0` per future | `size > 0` per future |
-| DWD size verification | — | ✓ sequential after Phase 2; 108 HEAD requests |
-| GRIB magic check | — | ✓ sequential after Phase 2; local disk only |
-| Transform | Dask threaded, 80 workers | Same (per-month, sequential months) |
-| Export | zlib level 1, float32 | Same |
-| Annual merge (post-process) | — | Separate: `python -m weather.common.merge` |
-| Resume support | — | ✓ `--resume` flag |
-| Per-month error isolation | — | ✓ try/except, continues |
-| Peak disk usage | ~8 GB (1 month) | ~84 GB (all grb after Phase 2; shrinks per month in Phase 3) |
-| Annual log file | — | `COSMO_REA6_YYYY_annual_<timestamp>.log` |
-
----
-
-## 8. Effective throughput on the HPC node
-
-Measured on HPC (96 cores, `/data/soma`, 2018 dataset, all 9 attributes):
-**one month ≈ 230 s** end-to-end including download, decompress, transform,
-and export.
-
-Estimated phase breakdown (230 s = 100 %):
-
-| Phase | Parallelism | Share | Time |
-| --- | --- | --- | --- |
-| Download (9 attrs, `ThreadPoolExecutor`) | 9 threads | ~25 % | ~58 s |
-| Decompress (9 attrs, `ProcessPoolExecutor`) | 9 processes | ~10 % | ~23 s |
-| Transform + Export (dask, 96 threads) | 96 threads | ~65 % | ~149 s |
-| **Total per month** | | **100 %** | **~230 s** |
-
-Times vary with network speed to DWD OpenData, disk I/O speed on `/data/soma`,
-and system load. Transform dominates on fast networks; download dominates on
-slow networks.
-
----
-
-### 8.1 Annual timing estimate and bulk-parallel savings
-
-With the measured 230 s/month baseline, the annual run over 12 months
-proceeds in three bulk phases:
-
-**Phase 1 — Bulk download** (all 108 bz2 files, 96 concurrent threads):
-
-Network I/O for all months runs in parallel. Observed wall time on the
-HPC node with 96 threads is **3–4 min** (180–240 s). The theoretical
-minimum equals one month's download time; the difference reflects DWD
-server response variability and retry overhead from transient 503 errors.
-
-$$T_{\text{Phase1}} \approx 180\text{–}240\,\text{s}$$
-
-**DWD size check** (background thread, concurrent with Phase 2):
-
-108 HEAD requests fired with up to `n_workers` (96) threads. With
-~50–150 ms RTT to DWD from the HPC network, ⌈108/96⌉ = 2 batches
-complete in well under 5 s — negligible, and free since it overlaps
-Phase 2.
-
-$$T_{\text{DWD check}} \approx 2 \times 150\,\text{ms} \approx 1\text{–}5\,\text{s}$$
-
-**Phase 2 — Bulk decompress** (all 108 grb files, 96 processes):
-
-With 96 processes and 108 tasks there are ⌈108/96⌉ = 2 rounds.
-Each bzip2 task takes ~23 s, so:
-
-$$T_{\text{Phase2}} \approx 2 \times 23\,\text{s} = 46\,\text{s}$$
-
-**Phase 3 — Transform + Export** (sequential months, dask saturates 96 cores):
-
-$$T_{\text{Phase3}} = 12 \times 149\,\text{s} = 1788\,\text{s}$$
-
-#### Annual total
-
-$$58 + 46 + 1788 = 1892\,\text{s} \approx \mathbf{32\,\text{min}}$$
-
-Summary (comparison with older approaches):
-
-| Mode | Phase 1 (dl) | Phase 2 (dc) | Phase 3 (tx+ex) | Total | Wall clock |
-| --- | --- | --- | --- | --- | --- |
-| Sequential | 12 × 58 s = 696 s | 12 × 23 s = 276 s | 12 × 149 s = 1788 s | 2760 s | ~46 min |
-| Old pre-fetch | ~58 s (M1 only) | 12 × 23 s = 276 s | 1788 s | ~2122 s | ~35 min |
-| **Bulk parallel (current)** | **~58 s** | **~46 s** | **1788 s** | **~1892 s** | **~32 min** |
-
-The key win over the old pre-fetch approach is **Phase 2**: the per-month
-sequential decompress (12 × 23 s = 276 s) is replaced by a single bulk
-pass with 96 processes (2 rounds × 23 s = 46 s), saving ~230 s.
-
-#### Sensitivity to download speed
-
-| Download time per month | Phase 1 wall time | Annual total |
-| --- | --- | --- |
-| 30 s (fast HPC network) | ~30 s | ~30 + 46 + 1788 = ~1864 s ≈ 31 min |
-| 58 s (measured baseline, 1-month test) | ~58 s | ~1892 s ≈ 32 min |
-| 180–240 s (observed, full-year with 96 threads) | ~180–240 s | ~2014–2074 s ≈ 34–35 min |
-| 90 s (moderate WAN) | ~90 s | ~1924 s ≈ 32 min |
-| 120 s (slow WAN) | ~120 s | ~120 + 46 + 1788 = ~1954 s ≈ 33 min |
-
-On a slow WAN connection the saving vs sequential processing can exceed
-20 minutes — Phase 1 wall time is bounded by a single-month's connection
-speed while the sequential baseline scales as 12× that speed.
-
----
-
-## 9. Configuration reference
-
-```bash
-# .env  (or CLI flags)
-COSMO_NCORES=94          # worker budget for all pools (download / decompress / dask)
-                          # On a 96-core node use 94–95, not 96:
-                          #   - leaves 1–2 cores for OS scheduler, SSH daemon,
-                          #     monitoring agents and any residual background work
-                          #   - avoids starving other users' processes if the
-                          #     node is shared or lightly used by others
-COSMO_WORK_DIR=/data/soma/cosmo_rea6
-
-# SLURM job script — allocate all 96 but tell the script to use 94
-#SBATCH --cpus-per-task=96
-# SLURM_CPUS_PER_TASK is read automatically but --ncores overrides it
-
-# Run  (explicit --ncores recommended on shared nodes)
-python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 94 --resume
-```
-
-### Choosing `--ncores`
-
-| Node situation | Recommended value | Reason |
-| --- | --- | --- |
-| Exclusively allocated SLURM job | `ncores - 1` (e.g. 95) | One core free for OS; no other users |
-| Shared node, no other-user jobs | `ncores - 2` (e.g. 94) | OS daemon safety margin |
-| Shared node, other jobs running | `ncores / 2` or `ncores - 4` | Avoid starving other workloads |
-
-All three executor pools (`ThreadPoolExecutor` for download and DWD checks,
-`ProcessPoolExecutor` for decompression, and dask for transform/export) are
-hard-capped at `min(n_tasks, ncores)`, so a single `--ncores 94` flag is
-sufficient to control the entire pipeline's core budget.
-
-### 9.1 COSMO_THREADS_PER_JOB — avoiding thread oversubscription
-
-`COSMO_THREADS_PER_JOB` controls how many threads each individual bzip2
-worker uses (default: 4). This interacts critically with `COSMO_NCORES`:
-
-| Decompressor | `COSMO_THREADS_PER_JOB` | Total OS threads | Effect |
-| --- | --- | --- | --- |
-| Python `bz2` stdlib | any | `ncores × 1` | **Ignored** — Python bz2 is always single-threaded |
-| `lbzip2` / `pbzip2` | 4 (default) | `94 × 4 = 376` | **Oversubscribed** — 376 threads / 94 cores |
-| `lbzip2` / `pbzip2` | **1** | `94 × 1 = 94` | **Correct** — one thread per core; max throughput |
-
-**Rule**: when running `test_cosmo_one_year.py` with bulk parallel decompression
-(`ProcessPoolExecutor`, `ncores` workers), always set:
-
-```bash
-COSMO_THREADS_PER_JOB=1   # in .env, or export before running
-```
-
-`lbzip2` at 1 thread is still faster than Python bz2 at 1 thread because
-it is a compiled C binary with lower per-byte overhead and no Python
-interpreter cost. The multi-thread benefit of lbzip2/pbzip2 only applies
-when decompressing **one file at a time** (e.g. the monthly script with
-`n = 9` workers on a 96-core node); for the annual bulk pass the
-process-level parallelism already saturates all cores.
-
----
-
-## 10. Related documentation
-
-| Topic | File |
-| --- | --- |
-| DNI formula and Spencer vectorization | [dni_methodology.md](dni_methodology.md) |
-| Monthly pipeline script | `src/weather/tests/test_cosmo_one_month.py` |
-| Annual pipeline script | `src/weather/tests/test_cosmo_one_year.py` |
-| Environment configuration | `.env.example` |
+| Topic                              | File                                                       |
+| ---------------------------------- | ---------------------------------------------------------- |
+| DNI formula, Spencer vectorization | [dni_methodology.md](dni_methodology.md)                   |
+| ERA5-Land bulk run / CDS queue     | [BULK_RUN_GUIDE_ERA5-LAND.md](BULK_RUN_GUIDE_ERA5-LAND.md) |
+| MERRA-2 bulk run / OPeNDAP         | [BULK_RUN_GUIDE_MERRA2.md](BULK_RUN_GUIDE_MERRA2.md)       |
+| COSMO pipeline code                | `src/weather/providers/cosmo_rea6/pipeline.py`             |
+| Environment configuration          | `.env.example`                                             |

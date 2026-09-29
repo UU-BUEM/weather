@@ -25,13 +25,18 @@ script.  Use ``weather.common.merge.NetCDFMerger`` or the merge CLI::
 
 Usage
 -----
-Basic (year 2018, 80 cores)::
+Basic (year 2018)::
 
-    python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 80
+    python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 12
+
+``--ncores`` is also the number of simultaneous DWD download
+connections; keep it around 12 (90 caused a storm of DWD 503s).
+The transform uses dask's own thread pool regardless -- see
+``docs/parallelization.md``.
 
 Resume an interrupted run (skips months whose output NC exists)::
 
-    python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 80 \\
+    python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 12 \\
         --resume
 
 Process only specific months (e.g. re-run a failed month)::
