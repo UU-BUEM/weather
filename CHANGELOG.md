@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.10.1] - 2026-09-29
+
+### Changed
+
+- `docs/percentile_methodology.md`: new practical note on read
+  parallelism over NFS — the ERA5-Land production run on `sd26` used
+  `ERA5_NCORES=32` rather than one worker per CPU, and COSMO-REA6's
+  read and mosaic worker counts are fixed in its script entry point.
+
+---
+
 ## [1.10.0] - 2026-09-29
 
 Includes everything under the 1.9.3 heading below, which was documented
