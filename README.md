@@ -151,8 +151,8 @@ provider has the same three CLI runners under `src/weather/tests/`:
 
 ```bash
 python ./src/weather/tests/test_cosmo_one_month.py --year 2018 --month 1
-python ./src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 80
-python ./src/weather/tests/test_cosmo_multi_year.py --from-year 1995 --to-year 2018
+python ./src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 12
+python ./src/weather/tests/test_cosmo_multi_year.py --from-year 1995 --to-year 2019
 ```
 
 (swap `cosmo` for `era5`/`merra2` for the other two providers). Common
@@ -161,6 +161,10 @@ periods whose output already exists), `--cleanup` (delete intermediates
 after a successful export — default is to keep everything unless the
 provider's `*_CLEANUP` env var is set). Full reference: `--help`; see
 `src/weather/tests/README.md` for the complete catalog.
+
+**Core counts:** for COSMO-REA6, `--ncores` is also the number of
+simultaneous DWD download connections — keep it around 12 (`--ncores 90`
+triggered a storm of DWD 503 errors). See `docs/parallelization.md`.
 
 Default provider can be set with:
 

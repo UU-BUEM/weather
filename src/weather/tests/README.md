@@ -65,18 +65,20 @@ Execution order for a complete dataset:
 
 | File | Purpose |
 | --- | --- |
-| `test_cosmo_one_month.py` | Download + decompress + transform 1 month of all 10 registered attributes |
+| `test_cosmo_one_month.py` | Download + decompress + transform 1 month of all 11 registered attributes |
 | `test_cosmo_one_year.py` | Full-year pipeline; produces 12 monthly NCs |
 | `test_cosmo_multi_year.py` | Delegates to `test_cosmo_one_year.py` per year, optionally via `ThreadPoolExecutor` |
 
 ```bash
 python src/weather/tests/test_cosmo_one_month.py --year 2018 --month 6 --ncores 8
-python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 94
-python src/weather/tests/test_cosmo_multi_year.py --from-year 1995 --to-year 2018 --ncores 94
+python src/weather/tests/test_cosmo_one_year.py --year 2018 --ncores 12
+python src/weather/tests/test_cosmo_multi_year.py --from-year 1995 --to-year 2019 --ncores 12
 ```
 
 Common flags: `--work-dir DIR` · `--ncores N` · `--skip-download` ·
 `--skip-decompress` · `--cleanup` · `--resume`. Full reference: `--help`.
+For COSMO keep `--ncores` around 12 — it is also the DWD download
+connection count (see `docs/parallelization.md`).
 
 ---
 

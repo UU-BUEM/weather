@@ -178,7 +178,12 @@ class EnvSettings:
     @staticmethod
     def cosmo_ncores() -> int:
         """
-        Parallel worker count (COSMO_NCORES or SLURM_CPUS_PER_TASK, default 4).
+        COSMO worker count (COSMO_NCORES or SLURM_CPUS_PER_TASK, default 4).
+
+        Sizes the download/verify thread pools (= simultaneous DWD
+        connections) and the decompress process pool -- NOT the dask
+        transform.  Keep it ~12 for runs that download from DWD; see
+        ``docs/parallelization.md``.
         """
         return int(
             os.getenv(

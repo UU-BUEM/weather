@@ -179,6 +179,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `providers/cosmo_rea6/{export,transform}.py` and five `tests/` tools.
   `common/merge.py`'s local `xarray` import is deliberate and was left
   alone — `xarray` is an extra, not a base dependency.
+- **Documentation review of `docs/` and related READMEs/docstrings.**
+  `docs/parallelization.md` rewritten: COSMO-REA6's `--ncores` is also
+  its DWD download-connection count (`--ncores 90` caused a 503 storm;
+  12 is recommended), and it does **not** set the transform's dask
+  workers (dask defaults to every CPU; `DASK_NUM_WORKERS` caps it). All
+  80/94/96-core COSMO examples updated accordingly (root `README.md`,
+  `tests/README.md`, `test_cosmo_{one,multi}_year.py` docstrings,
+  `docker-compose.yml` comments). `qa.md` §1 described whole-year
+  selection; it now describes the actual per-month method.
+  `percentile_methodology.md` covers all three providers, the real
+  monthly time axis/schema and the verified 2026-08-19/20 results.
+  `provider_differences.md` gains the measured timestamp/`cell_methods`
+  table and the KNMI accuracy ranking (§10). Stale references removed
+  (`test_percentile.py`, KS-distance, 9 attributes, 1995–2027,
+  unapplied `fast_download` patch); bulk-run guides updated to the
+  settings production actually used; `docs/README.md` now indexes
+  `WEATHER_FETCH_GUIDE.md` and shows archive status.
+- **Docstrings brought in line with the code and measurements.** COSMO
+  `pipeline.py`/`download.py`/`decompress.py`/`settings.py` now say what
+  `ncores` really sizes (DWD connections and decompress processes, not
+  dask) and that `COSMO_THREADS_PER_JOB` defaults to 4. All three
+  `percentile_index.py` modules describe the current cumulative-GHI
+  selection instead of the replaced KS-distance rule (method names
+  unchanged). MERRA-2's `SWGDN` is described as an hourly-mean rate, not
+  "instantaneous" (NASA's time-averaged `M2T1NX*` collection,
+  KNMI-corroborated) — also in the GHI `description` attribute of new
+  MERRA-2 exports. `common/percentile_poe.py` is marked unused and warns
+  that its bankability P-naming is the reverse of production's.
 
 ## [1.9.3] - 2026-08-15
 

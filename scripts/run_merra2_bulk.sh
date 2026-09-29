@@ -10,7 +10,7 @@
 #   2. verify_merra2_months.py    QA report over the whole output folder
 #
 # Unlike ERA5-Land, there is NO boundary-repair step: MERRA-2's GHI (`SWGDN`)
-# is already instantaneous, not accumulated, so there is no de-accumulation /
+# is already an hourly-mean rate, not accumulated, so there is no de-accumulation /
 # first-hour boundary problem to fix (see docs/MERRA2_PIPELINE_GUIDE.md,
 # "GHI = SWGDN directly"). Step 2 always runs over the WHOLE output directory
 # (not just the years passed to this call) so an incremental/partial bulk run

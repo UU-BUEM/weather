@@ -24,6 +24,11 @@ These are real, expected differences between three independently-run
 reanalysis products — not bugs, and not something to "fix" by unifying
 the formulas (see `CLAUDE.md`: "Do NOT unify").
 
+**Which one is closest to measurements?** Sections 1–9 compare the
+providers against *each other*. Section 10 compares all three against
+measured KNMI station data for the Netherlands (2018): ERA5-Land has
+the lowest GHI bias and the highest correlation there.
+
 ---
 
 ## Attribute naming reference: raw source -> canonical output
@@ -43,7 +48,7 @@ the way: COSMO used to drop its raw wind components, and ERA5-Land's
 | --------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
 | `T`             | `T_2M` (K -> degC)                                                           | `t2m` (rename)                                             | `T2M` (rename)                                             |
 | `T_DEW`         | `T_2M`+`RELHUM_2M` (derived, inverse Magnus-Tetens — no native field exists) | `d2m` (rename, native)                                     | `T2MDEW` (rename, native)                                  |
-| `GHI`           | `SWDIFDS_RAD`+`SWDIRS_RAD` (sum, clipped)                                    | `ssrd` (de-accumulated, ÷3600)                             | `SWGDN` (night-masked, already instantaneous)              |
+| `GHI`           | `SWDIFDS_RAD`+`SWDIRS_RAD` (sum, clipped)                                    | `ssrd` (de-accumulated, ÷3600)                             | `SWGDN` (night-masked, hourly-mean rate)                   |
 | `DHI`           | `SWDIFDS_RAD` (native, exact)                                                | — (bulk not computed; point-of-use via `dni_pointwise.py`) | — (bulk not computed; point-of-use via `dni_pointwise.py`) |
 | `DNI`           | `SWDIRS_RAD`/cos(θz) (native, experimental)                                  | — (point-of-use only)                                      | — (point-of-use only)                                      |
 | `RH`            | `RELHUM_2M` (rename, direct measurement)                                     | `t2m`+`d2m` (Magnus formula)                               | `QV2M`+`PS`+`T2M` (Bolton 1980 formula)                    |
@@ -325,11 +330,11 @@ snapshot exists.
 
 ### What's different
 
-| Provider   | GHI                             | DHI                                                               | DNI                                                              |
-| ---------- | ------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------- |
-| COSMO-REA6 | `SWDIFDS_RAD + SWDIRS_RAD`      | `SWDIFDS_RAD` (native, exact)                                     | `SWDIRS_RAD / cos(θz)` (native, exact — not a GHI decomposition) |
-| ERA5-Land  | de-accumulated `ssrd`           | pvlib DIRINT decomposition of GHI (only option — no native split) | pvlib DIRINT decomposition of GHI                                |
-| MERRA-2    | `SWGDN` (already instantaneous) | pvlib DIRINT decomposition of GHI                                 | pvlib DIRINT decomposition of GHI                                |
+| Provider   | GHI                        | DHI                                                               | DNI                                                              |
+| ---------- | -------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------- |
+| COSMO-REA6 | `SWDIFDS_RAD + SWDIRS_RAD` | `SWDIFDS_RAD` (native, exact)                                     | `SWDIRS_RAD / cos(θz)` (native, exact — not a GHI decomposition) |
+| ERA5-Land  | de-accumulated `ssrd`      | pvlib DIRINT decomposition of GHI (only option — no native split) | pvlib DIRINT decomposition of GHI                                |
+| MERRA-2    | `SWGDN` (hourly-mean rate) | pvlib DIRINT decomposition of GHI                                 | pvlib DIRINT decomposition of GHI                                |
 
 This is the single biggest methodological difference between COSMO and
 the other two: COSMO-REA6's regional model separately simulates direct
@@ -462,17 +467,29 @@ dedicated analysis. Flagged for completeness.
 
 ---
 
-## 8. Timestamp convention: MERRA-2 labels mid-interval, COSMO/ERA5-Land label on the hour
+## 8. Timestamps and what a value means: three different conventions
 
-MERRA-2's hourly-mean collections (`rad`, `slv`) label each timestamp
-at the **midpoint** of the averaging interval (`HH:30`, e.g.
-`2018-06-01T00:30`), since that's what the mean actually represents.
-COSMO-REA6 and ERA5-Land both label on the hour (`HH:00`). This is a
-genuine provider difference, not a bug, and is **not** corrected/shifted
-anywhere in this codebase — any code that merges or directly compares
-MERRA-2 against the other two on a shared time index must handle the
-30-minute offset explicitly (resample/interpolate one onto the other's
-index) rather than assume the raw indices line up. Full detail:
+| Provider   | First stamp of a month | Last stamp       | Convention          | Radiation value is (`cell_methods`)  |
+| ---------- | ---------------------- | ---------------- | ------------------- | ------------------------------------ |
+| COSMO-REA6 | 01:00                  | next month 00:00 | hour-ENDING         | instantaneous (`time: point`)        |
+| ERA5-Land  | 00:00                  | 23:00            | on the hour         | hourly mean (`time: mean`, GHI only) |
+| MERRA-2    | 00:30                  | 23:30            | hour centre (HH:30) | hourly mean (`time: mean`)           |
+
+None of this is shifted or corrected anywhere in the codebase. Code
+that merges or compares providers on one time index must align them
+explicitly (e.g. `validate_knmi.align_to_hour_ending()` for MERRA-2's
+`HH:30` stamps) rather than assume the raw indices line up.
+
+The radiation semantics were **measured** against KNMI pyranometers
+(2026-08-26), not assumed: COSMO matched the instantaneous value at the
+stamp at 100 % of stations; ERA5-Land matched the hourly mean at 89 %
+(consistent with its derivation from the `ssrd` accumulation; its 2 m
+fields are instantaneous analyses and were not measured); MERRA-2 only
+53 % — its ~50 km cells swamp the sub-hourly signal — so its `time:
+mean` rests on NASA's time-averaged `M2T1NX*` collection definition.
+Integrate COSMO's instantaneous samples trapezoidally for sub-daily
+energy; annual totals are unaffected. Full detail:
+[dni_methodology.md §11.3](dni_methodology.md) and
 `docs/MERRA2_PIPELINE_GUIDE.md`'s "Timestamp convention" section.
 
 ---
@@ -497,6 +514,40 @@ likewise computed independently per provider on its own native grid,
 so a domain mean is not a like-for-like average over identical
 physical area between providers. Cross-provider regridding, if ever
 needed, is a separate, not-yet-built future task.
+
+---
+
+## 10. Accuracy against measured data: KNMI, Netherlands, 2018
+
+Tool: `src/weather/tests/validate_knmi.py` (KNMI open-data hourly API,
+no key; nearest grid cell per station; tolerance derived from each
+grid). Output: `data/validation/NL/` (the 47-station COSMO report is
+`knmi_validation_2018.md`).
+
+| Provider   | GHI bias | Hourly r | Annual GHI at Amsterdam |
+| ---------- | -------- | -------- | ----------------------- |
+| ERA5-Land  | +1.7 %   | 0.960    | 1190.7 kWh/m²           |
+| COSMO-REA6 | −9.7 %   | 0.926    | 1041.4 kWh/m²           |
+| MERRA-2    | +13.2 %  | 0.940    | 1307.0 kWh/m²           |
+
+KNMI Schiphol measured **1153.4 kWh/m²**. For the Netherlands,
+**ERA5-Land is the best irradiance source**; COSMO-REA6's finer grid does
+not buy accuracy here. Temperature is good for all three (bias −0.24 to
++0.23 °C, r 0.979–0.985).
+
+GHI bias by sky condition — every provider's bias changes sign or size
+with cloud, which a units or scaling error cannot do, so these are model
+(radiative-transfer) biases, not pipeline defects:
+
+| Provider   | Overcast | Broken  | Hazy    | Clear   |
+| ---------- | -------- | ------- | ------- | ------- |
+| COSMO-REA6 | +7.1 %   | −8.1 %  | −14.7 % | −14.2 % |
+| ERA5-Land  | +39.0 %  | +4.8 %  | −7.3 %  | −9.0 %  |
+| MERRA-2    | +60.7 %  | +18.6 % | +3.6 %  | −2.7 %  |
+
+The coarser the grid, the larger the overcast overestimate — a cell
+average cannot represent a broken cloud field. These numbers hold for
+the Netherlands in 2018; other regions and years have not been checked.
 
 ---
 

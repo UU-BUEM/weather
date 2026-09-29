@@ -1,8 +1,17 @@
 # ERA5-Land bulk-run guidance and launch scripts
 
+**Status (2026-08):** the 1950–2025 archive is complete and audited on
+`sd26` — 912/912 GRIB in, 912/912 NetCDF out, no month or hour gaps,
+every file `BOUNDARY_REPAIRED`, 11 interior GHI spikes repaired
+(`spike_repair.py`), CF metadata repaired, and P10/P50/P90 mosaics done.
+It was run sequentially with `ERA5_CDS_MAX_CONCURRENT=1` and
+`--ncores 6`. The archive still uses the **legacy** variable names (it
+predates the 2026-07-26/30 naming unification); a rename pass is open.
+This guide is for extending or rebuilding it.
+
 ## The key insight: you are download-bound, not compute-bound
 
-From your own run logs:
+From the production run logs:
 
 - CDS download per month: ~14-52 min queue + ~6 min transfer
 - Transform per month: ~11 min (mostly I/O + zlib, already compiled C)
@@ -35,11 +44,11 @@ for MERRA-2, which needs no repair step):
     conda activate weather_env
     export ERA5_WORK_DIR=/data/soma/era5_land
     export ERA5_AREA=72,-11,34,32
-    export ERA5_CDS_MAX_CONCURRENT=6
+    export ERA5_CDS_MAX_CONCURRENT=1
 
     bash scripts/run_era5_bulk.sh \
-        --from-year 1950 --to-year 2024 \
-        --ncores 8 --resume
+        --from-year 1950 --to-year 2025 \
+        --ncores 6 --resume
 
     # detach: Ctrl-b then d      reattach: tmux attach -t era5
 
@@ -52,8 +61,8 @@ month finishes.
 ### 2. nohup (fire-and-forget, no wrapper script)
 
     nohup python src/weather/tests/test_era5_multi_year.py \
-        --from-year 1950 --to-year 2024 \
-        --ncores 8 --resume \
+        --from-year 1950 --to-year 2025 \
+        --ncores 6 --resume \
         > era5_bulk.log 2>&1 &
     tail -f era5_bulk.log
 
@@ -71,11 +80,15 @@ CPU. Here is the honest hierarchy of what helps:
 
 ### Helps a LOT: CDS request concurrency (up to the account limit)
 
-CDS processes a limited number of your requests SIMULTANEOUSLY (queued
-otherwise). Raising ERA5_CDS_MAX_CONCURRENT lets more months download in
-parallel. This is the single biggest lever. But CDS caps concurrent
-active requests per account (historically ~ a handful). Beyond that cap,
-extra requests just queue - no speed-up, and risk rejection.
+CDS processes a limited number of your requests simultaneously and
+queues the rest. For this dataset the production run saw effectively
+**one active job per account**, so `ERA5_CDS_MAX_CONCURRENT=1` (the
+`.env.example` default) is the right setting: higher values only add
+queued requests — no speed-up, and a risk of rejection. Likewise
+`--parallel-years > 1` gives no download speed-up (a warning fires).
+The real levers are the parallel byte-range transfer of each finished
+file (`ERA5_DOWNLOAD_CONNECTIONS`, see `DOWNLOAD_AND_LOGGING.md`) and,
+if permitted, more accounts (below).
 
 ### Helps: overlapping download with transform (see interleaved mode)
 
@@ -85,7 +98,8 @@ hides the ~11 min transform behind the unavoidable download wait.
 ### Helps MODESTLY: transform workers
 
 Transform is I/O+compression bound. 4-8 workers is plenty; 94 gives no
-extra benefit and multiplies memory (each opens a GRIB). Keep ncores 4-8.
+extra benefit and multiplies memory (each opens a GRIB). Keep ncores 4-8
+(production used 6).
 
 ### Does MULTIPLE ACCOUNTS help? Yes - this is the real multiplier
 
@@ -115,7 +129,8 @@ gain given the download wait.
 
 ## Disk budget (Europe crop, ~1.4 GB GRIB, ~few hundred MB nc per month)
 
-Final nc archive for 1950-2024 x 12 months is well under 1 TB --
+Final nc archive for 1950-2025 x 12 months is well under 1 TB (kept raw
+GRIB: ~1.26 TB) --
 comfortable in 15 TB. With the current default (keep everything,
 `ERA5_CLEANUP=false`), the raw GRIBs stay too -- total footprint is
 larger but still well within budget, and avoids the multi-week

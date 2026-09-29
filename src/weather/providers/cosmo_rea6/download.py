@@ -129,9 +129,12 @@ def download_all(
     Uses :class:`~.downloader.CosmoDownloader` for per-file
     check-before-fetch and :func:`~weather.common.parallel.run_parallel`
     for concurrent downloads. DWD OpenData is a plain static-file HTTPS
-    server (no documented rate limit, unlike CDS/GES DISC) -- worker
-    count defaults to one thread per task, capped only by *ncores*, not
-    an artificial ceiling.
+    server with no documented rate limit -- but it does throttle in
+    practice: ~90 simultaneous connections (``--ncores 90``) produced a
+    storm of ``503 Service Temporarily Unavailable`` in the 2026-08
+    archive rebuild, while 12 worked.  Worker count defaults to
+    ``min(n_tasks, ncores)``, so *ncores* is effectively the DWD
+    connection count; keep it around 12.
 
     Parameters
     ----------
@@ -146,7 +149,8 @@ def download_all(
     base_url : str, optional
         Override DWD base URL.
     max_workers : int, optional
-        Concurrent download threads (default: ``min(n_tasks, ncores)``).
+        Concurrent download threads, i.e. simultaneous DWD connections
+        (default: ``min(n_tasks, ncores)``).
 
     Returns
     -------

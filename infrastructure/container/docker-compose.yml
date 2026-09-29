@@ -23,8 +23,13 @@
 #   docker compose -f infrastructure/container/docker-compose.yml \
 #       run --rm cosmo-rea6-multi
 #
-#   Parallel (4 years at once, 24 cores each → needs ~120 GB RAM):
-#   COSMO_PARALLEL_YEARS=4 COSMO_NCORES=96 \
+#   COSMO_NCORES is also the number of simultaneous DWD download
+#   connections: keep it ~12 (90 caused DWD 503 storms). Parallel years
+#   share it (ncores // years each), so more years do not add connections;
+#   the transform uses dask's own pool (cap with DASK_NUM_WORKERS).
+#   See docs/parallelization.md.
+#   Parallel (2 years at once, 6 download threads each):
+#   COSMO_PARALLEL_YEARS=2 COSMO_NCORES=12 \
 #   docker compose -f infrastructure/container/docker-compose.yml \
 #       run --rm cosmo-rea6-multi
 #

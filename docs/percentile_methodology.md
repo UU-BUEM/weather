@@ -1,19 +1,24 @@
-# COSMO-REA6 Percentile Representative Year Methodology
+# Percentile Representative-Month Methodology (all providers)
 
 ## 1. Overview
 
-For each of the 824 × 848 spatial cells, this algorithm identifies
-which calendar year from the COSMO-REA6 archive best represents the
-10th-percentile (P10), median (P50), and 90th-percentile (P90) of the
-long-term solar radiation climate. The algorithm works over whatever
-years are actually present — the real production run used the full
-1995–2019 archive (298 monthly files, not a clean 24-year boundary;
-DWD's real coverage stops partway through 2019).
+For every grid cell and every calendar month, this algorithm identifies
+which year of the archive best represents the 10th-percentile (P10),
+median (P50) and 90th-percentile (P90) of that month's long-term solar
+radiation. The same algorithm is implemented in each provider's
+`percentile_index.py` (COSMO-REA6, ERA5-Land, MERRA-2) and works over
+whatever monthly files are present:
+
+| Provider   | Archive used       | Candidate years     | Grid                       |
+| ---------- | ------------------ | ------------------- | -------------------------- |
+| COSMO-REA6 | 1995-01 .. 2019-08 | 25 (24 for Sep–Dec) | 824 x 848 rotated-pole     |
+| ERA5-Land  | 1950-01 .. 2025-12 | 76                  | 0.1° regular, Europe crop  |
+| MERRA-2    | 1980-01 .. 2025-12 | 46                  | 0.5° x 0.625°, Europe crop |
 
 The ranking metric is GHI (Global Horizontal Irradiance), the primary
-solar energy resource variable.  Once the representative year is
-selected per cell per percentile, **all variables** from that year's
-file are carried into the output mosaic — not just GHI.
+solar energy resource variable. Once the representative year is selected
+per cell, month and percentile, **all variables** from that year's
+monthly file are carried into the output mosaic — not just GHI.
 
 ---
 
@@ -31,14 +36,17 @@ by cumulative monthly global radiation.
 
 ### 3.1 Inputs
 
-| Input | Shape | Description |
-| --- | --- | --- |
-| Monthly NetCDF files | real production run: 298 | `COSMO_REA6_YYYY_MM_all_attrs.nc` |
-| Analysis period | 1995–2019 | ~24.8 years (real archive; see note above) |
-| Spatial grid | 824 × 848 | COSMO-REA6 rotated-pole |
-| Ranking metric | daily GHI sum | Summed per calendar day, per cell |
+| Input                | Shape                  | Description                                   |
+| -------------------- | ---------------------- | --------------------------------------------- |
+| Monthly NetCDF files | one per year and month | e.g. `COSMO_REA6_YYYY_MM_all_attrs.nc`        |
+| Analysis period      | see table in section 1 | every monthly file in the output folder       |
+| Spatial grid         | provider's native grid | `(y, x)` for COSMO; regular lat/lon otherwise |
+| Ranking metric       | daily GHI sum          | Summed per calendar day, per cell             |
 
-Leap-year days (29 Feb) are removed before any calculation.
+Leap-year days (29 Feb) are removed before any calculation, and so is
+any stamp outside the file's own calendar month. COSMO-REA6 labels hours
+as ENDING (01:00 .. next month 00:00), so its last stamp falls in the
+next month and is dropped: 1 h of 744, uniform across years.
 
 ### 3.2 Steps
 
@@ -96,11 +104,11 @@ regenerated.
 
 ### 3.3 Physical Interpretation
 
-| Output | GHI level | Interpretation |
-| --- | --- | --- |
-| **P10** | 10th percentile | Extreme cloudy / low-solar year |
-| **P50** | Median | Typical Meteorological Year (TMY) |
-| **P90** | 90th percentile | Extreme sunny / high-solar year |
+| Output  | GHI level       | Interpretation                    |
+| ------- | --------------- | --------------------------------- |
+| **P10** | 10th percentile | Extreme cloudy / low-solar year   |
+| **P50** | Median          | Typical Meteorological Year (TMY) |
+| **P90** | 90th percentile | Extreme sunny / high-solar year   |
 
 Adjacent cells can and do select **different years** — each cell
 optimises independently.
@@ -111,23 +119,42 @@ Because each cell independently selects its representative year,
 the output files are spatial mosaics:
 
 ```text
-P50 output (8760 h × 824 × 848):
+P50 output for July (744 h × 824 × 848):
   cell(0,0)     → all variables from year 2007
   cell(0,1)     → all variables from year 2003
   cell(823,847) → all variables from year 2011
   ...
 ```
 
-The `source_year(rlat, rlon)` variable in each output file records
-the origin year for every cell.
+The `source_year(y, x)` variable in each output file records the origin
+year for every cell. It is `-1` (`NO_SOURCE_YEAR`) where **no** year has
+data for the cell — e.g. ERA5-Land ocean cells under its land-sea mask.
+A cell with data in only some years is ranked over those years.
+
+### 3.5 Verified results (runs of 2026-08-19/20)
+
+| Provider   | Distinct winning years | Max single-year share | P10 < P50 < P90 | Flagged cells           |
+| ---------- | ---------------------- | --------------------- | --------------- | ----------------------- |
+| ERA5-Land  | 73–75 of 76            | 3.5–9.2 %             | 12/12 months    | 80361 (= land-sea mask) |
+| MERRA-2    | 44–46 of 46            | 4.7–18.3 %            | 12/12 months    | 0                       |
+| COSMO-REA6 | 23–25 of 25            | 5.1–10.5 %            | 12/12 months    | 0                       |
+
+Domain-mean GHI P10 / P50 / P90 (W/m²): ERA5-Land 120.16 / 135.80 /
+151.21; MERRA-2 129.89 / 143.85 / 157.26; COSMO-REA6 129.82 / 144.50 /
+157.95. "Max single-year share" is the check that exposed the old bug:
+counting *distinct* years alone stays high even when one year wins most
+cells.
 
 ---
 
 ## 4. Time Axis
 
-All output files use a standard **8760-hour axis** (365 days × 24 h).
-Leap-year files (8784 h) have their last 24 h (31 Dec hours 00–23)
-truncated to match.
+Each output file covers one calendar month. Its time axis is that
+month's hours with 29 Feb removed (so February never exceeds 672 h) and any
+out-of-month stamp dropped (see 3.1). Source months do not always share
+one axis — ERA5-Land's 1950-01 starts at 01:00, COSMO always starts at
+01:00 — so the mosaic is sized from the longest axis among the winning
+years and each year is written at its own hour offset.
 
 ---
 
@@ -135,16 +162,23 @@ truncated to match.
 
 36 files total: 12 months × 3 percentile levels.
 
-| Pattern | Percentile | Content |
-| --- | --- | --- |
-| `cosmo_rea6_p10_MM_all_attrs.nc` | P10 | Extreme low-GHI (cloudy) year |
-| `cosmo_rea6_p50_MM_all_attrs.nc` | P50 | Median / typical year |
-| `cosmo_rea6_p90_MM_all_attrs.nc` | P90 | Extreme high-GHI (sunny) year |
+| Pattern                          | Percentile | Content                |
+| -------------------------------- | ---------- | ---------------------- |
+| `<provider>_p10_MM_all_attrs.nc` | P10        | Low-GHI (cloudy) month |
+| `<provider>_p50_MM_all_attrs.nc` | P50        | Median / typical month |
+| `<provider>_p90_MM_all_attrs.nc` | P90        | High-GHI (sunny) month |
 
-**Format:** NetCDF-4 / HDF5, zlib compression level 1, float32.  
-**Dimensions:** `time=8760, rlat=824, rlon=848`.  
-**Variables:** `T`, `GHI`, `DHI`, `WS_10M`, `PS`, `H_SNOW`,
-`SNOW_GSP`, `SNOW_CON` (+ `DNI` if present), `source_year`.
+`<provider>` is `cosmo_rea6`, `era5_land` or `merra2`; files are written
+to `<output_dir>/percentile/` by `weather fetch --percentile` or the
+provider's own `percentile_index.py`.
+
+**Format:** NetCDF-4 / HDF5, zlib compression level 1, float32.
+**Dimensions:** `time` (one month, see section 4) and the provider's
+spatial dims (`y`, `x` for COSMO-REA6).
+**Variables:** every data variable of the source monthly files — i.e.
+whatever schema the archive carries (COSMO: `T`, `GHI`, `DHI`, `DNI`,
+`RH`, `T_DEW`, `WS_10M`, `U_10M`, `V_10M`, `PS`, `SNOW_DEPTH`,
+`SNOWFALL`, `ALBEDO`) — plus `source_year`.
 
 ---
 
@@ -152,16 +186,10 @@ truncated to match.
 
 - **Re-runs:** Existing valid output files are skipped automatically.
   Run with `--clean` to remove all output and force a full re-run.
-- **Sample size:** N = 24 years gives moderate percentile uncertainty,
+- **Sample size:** N = 25 years (COSMO) gives moderate percentile uncertainty,
   particularly at P10/P90, where the target level is interpolated from
   only two or three bracketing years.  Interpret the tails with
   caution; ERA5-Land's 76-year archive is correspondingly tighter.
-- **Time axis:** monthly source files are not guaranteed to share one
-  time axis — ERA5-Land's 1950-01 has no 00:00 stamp and so carries 743
-  hours starting at 01:00.  The mosaic is sized from the longest axis
-  across the winning years and each year is written at its own hour
-  offset, so a short year lands in the right slots instead of shifting
-  an hour early.
 - **GHI-only ranking:** Cells with uniformly low GHI (heavily clouded)
   may show inconsistent temperature or wind rankings relative to the
   selected P-level.  Multi-variable ranking is a planned extension.

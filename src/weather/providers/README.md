@@ -45,29 +45,30 @@ percentile and documentation") and replaced by the standalone
 still exist in the tree but are unused — check with the team before
 building a new provider against them.
 
-## `percentile_index.py` — the actual production pattern (COSMO + ERA5-Land)
+## `percentile_index.py` — the actual production pattern (all three providers)
 
-Each of `cosmo_rea6/percentile_index.py` and `era5_land/percentile_index.py`
-is a self-contained, three-phase script (no shared base class):
+Each of `cosmo_rea6/`, `era5_land/` and `merra2/percentile_index.py` is a
+self-contained, three-phase script (no shared base class):
 
 ```text
-Load (parallel file read)  →  KS distance match per month/cell  →  Mosaic
-(day-summed GHI, leap        (argmin |empirical CDF − pooled       (spawn
- days dropped)                 P10/P50/P90 threshold|)              workers
-                                                                     write
-                                                                     36 NC
-                                                                     files)
+Load (parallel file read)  →  rank years per month/cell  →  Mosaic
+(day-summed GHI; leap days    (year nearest the P10/P50/   (spawn workers
+ and out-of-month stamps       P90 of cumulative monthly    write 36 NC
+ dropped)                      GHI across years)            files)
 ```
 
-Both read monthly NetCDF files directly (`*_YYYY_MM_*.nc`), find — per
-grid cell and calendar month — the year whose empirical GHI distribution
-best matches the pooled P10/P50/P90 threshold (Finkelstein-Schafer
-KS-distance), then mosaic every variable from the winning year into
-`{provider}_{p10,p50,p90}_{MM}_all_attrs.nc`, including a `source_year`
-provenance variable. ERA5-Land's version is a structural port of COSMO's,
-differing only in: filename regex, grid size inferred from data (not
-hardcoded), and `n_cpu_cores` default (6, I/O-bound vs COSMO's 94,
-CPU-bound).
+All three read monthly NetCDF files directly (`*_YYYY_MM_*.nc`), pick —
+per grid cell and calendar month — the year whose cumulative monthly GHI
+is nearest the P10/P50/P90 of those totals across years (ASHRAE TMY3
+style), then mosaic every variable from the winning year into
+`{provider}_{p10,p50,p90}_{MM}_all_attrs.nc`, with a `source_year`
+provenance variable (`-1` where no year has data). The earlier
+Finkelstein-Schafer "KS-distance" rule never delivered the requested
+P-levels and was replaced on 2026-08-19; see
+`docs/percentile_methodology.md` §3.2.1. The scripts differ only in
+filename regex, grid handling, and `n_cpu_cores` default (6/8 for the
+lighter ERA5-Land/MERRA-2 loads vs COSMO's 94 — local file reads only,
+unrelated to COSMO's download `--ncores`).
 
 ---
 
@@ -79,14 +80,14 @@ CPU-bound).
 | `config.py` | Resolves all `COSMO_*` environment variables to typed paths/values |
 | `download.py` | Generates DWD OpenData URLs; drives `BaseDownloader` |
 | `downloader.py` | Concrete `BaseDownloader` subclass for DWD HTTPS downloads |
-| `downloaded_attributes.py` | Enum/list of the 9 available raw attributes |
+| `downloaded_attributes.py` | Dict of the 11 raw attributes downloaded from DWD |
 | `decompress.py` | bz2 → GRIB with lbzip2/pbzip2/python-bz2 fallback |
 | `decompressor.py` | Concrete `BaseDecompressor` subclass |
 | `transform.py` | Opens GRIB with cfgrib; applies derived fields; writes monthly NC |
 | `export.py` | `xr.Dataset → NetCDF` with zlib encoding and attribute metadata |
 | `naming.py` | Canonical filename helpers for all output paths |
 | `pipeline.py` | Orchestrates Phases 1 → 2 → 3 for one year; returned by `WeatherProvider.run_pipeline()` |
-| `percentile_index.py` | Standalone P10/P50/P90 KS-distance script (see above) |
+| `percentile_index.py` | Standalone P10/P50/P90 representative-month script (see above) |
 
 ### COSMO-REA6 per-year pipeline flow
 

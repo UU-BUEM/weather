@@ -21,49 +21,46 @@ Parallelism
 -----------
 By default years run **sequentially** (``--parallel-years 1``).
 Increase to run multiple years simultaneously.  Each active year
-receives ``ncores // parallel_years`` dask workers.
+receives ``ncores // parallel_years`` as its ``--ncores``.
 
-Example breakdown with 96 cores and 24 years (1995–2018):
-
-+-------------------+-------------+-----------+-----------+
-| --parallel-years  | cores/year  | ~min/year | ~total    |
-+===================+=============+===========+===========+
-| 1 (default)       | 96          | 30        | ~12 h     |
-| 2                 | 48          | 40        | ~8 h      |
-| 4                 | 24          | 60        | ~6 h      |
-+-------------------+-------------+-----------+-----------+
-
-Memory: each active year needs ~30 GB peak (one month at a time).
-With ``--parallel-years 4`` on a 256 GB node → ~120 GB peak — safe.
+For COSMO-REA6 ``--ncores`` sets the download/verify thread count and
+the decompress process count -- i.e. the number of simultaneous DWD
+connections, which stays ~``ncores`` however many years run at once.
+Keep it around 12: ``--ncores 90`` caused a storm of DWD 503 errors.
+The transform does NOT use it; dask's threaded scheduler defaults to
+one thread per CPU in every year's subprocess, so parallel years
+oversubscribe the CPU and multiply memory (~30-45 GB peak per active
+year). Cap dask with ``DASK_NUM_WORKERS`` when using
+``--parallel-years > 1``. See ``docs/parallelization.md``.
 
 Output
 ------
 For each year:
   12 × ``COSMO_REA6_<YYYY>_<MM>_all_attrs.nc`` in ``<out_dir>/``
 
-Annual merge (post-processing, optional — needed for percentile
-analysis):
+Annual merge (post-processing, optional -- percentile_index.py reads
+the monthly files directly and does not need it):
   ``python -m weather.common.merge \\``
   ``    --input  <out>/COSMO_REA6_<YYYY>_??_all_attrs.nc \\``
   ``    --output <out>/COSMO_REA6_<YYYY>_annual_all_attrs.nc``
 
 Usage
 -----
-Basic (all 24 years, sequential)::
+Basic (full DWD archive, sequential)::
 
     python src/weather/tests/test_cosmo_multi_year.py \\
-        --from-year 1995 --to-year 2018 --ncores 94
+        --from-year 1995 --to-year 2019 --ncores 12
 
-Parallel (4 years at once)::
+Parallel (2 years at once, dask capped per year)::
 
-    python src/weather/tests/test_cosmo_multi_year.py \\
-        --from-year 1995 --to-year 2018 \\
-        --ncores 96 --parallel-years 4
+    DASK_NUM_WORKERS=47 python src/weather/tests/test_cosmo_multi_year.py \\
+        --from-year 1995 --to-year 2019 \\
+        --ncores 12 --parallel-years 2
 
 Resume interrupted run::
 
     python src/weather/tests/test_cosmo_multi_year.py \\
-        --from-year 1995 --to-year 2018 --ncores 94 --resume
+        --from-year 1995 --to-year 2019 --ncores 12 --resume
 
 Flags
 -----

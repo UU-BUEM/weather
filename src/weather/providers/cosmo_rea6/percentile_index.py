@@ -1,14 +1,17 @@
 """COSMO-REA6 percentile indexer - pure CPU/numpy implementation.
 
 Derives P10, P50, and P90 representative-year mosaics for every grid
-cell (824 x 848) across the 1995-2018 COSMO-REA6 dataset by ranking
+cell (824 x 848) across the 1995-01..2019-08 COSMO-REA6 archive by ranking
 candidate years on cumulative monthly GHI, as documented in
 ``docs/percentile_methodology.md``.
 
 Pipeline
 --------
-1. Load   : 288 monthly NetCDF files read in parallel (94 workers).
-            Daily GHI sums extracted; leap days removed.
+1. Load   : every monthly NetCDF file (296 for the full archive) read
+            in parallel (``n_cpu_cores``, default 94 -- local reads
+            only, unrelated to the pipeline's DWD ``--ncores``).
+            Daily GHI sums extracted; leap days and out-of-month
+            stamps (COSMO's hour-ending last stamp) removed.
 2. Select : For each month and cell, total each year's daily GHI and
             pick the year nearest the 10th/50th/90th percentile of
             those totals taken across years.  Pure numpy;
@@ -168,8 +171,8 @@ def _build_month_mosaic(args: tuple) -> str:
 
     Design
     ------
-    The KS phase identifies the best source year per grid cell using
-    GHI only.  The mosaic phase then copies **all variables** from that
+    The selection phase identifies the best source year per grid cell
+    and month using GHI only.  The mosaic phase then copies **all variables** from that
     winning year into the output — GHI is not special here, every
     variable in the source file is carried across.
 
@@ -603,15 +606,18 @@ class CosmoRea6PercentileIndexer:
 
     The pipeline has three sequential phases:
 
-    1. **Load** (``compile_historical_baselines``): read all 288 input
+    1. **Load** (``compile_historical_baselines``): read all input
        NetCDF files in parallel using up to ``n_cpu_cores`` workers,
        extract day-summed GHI, and organise results by month and year.
 
-    2. **KS match** (``_compute_ks_for_month``): for each of the 12
-       months, find the year whose empirical GHI distribution best
-       matches the pooled P10, P50, and P90 thresholds via minimum
-       Kolmogorov-Smirnov distance.  Runs in pure vectorised numpy;
-       completes in under one second per month.
+    2. **Select** (``_compute_ks_for_month`` -- historical name): for
+       each of the 12 months and every cell, total each year's daily GHI
+       and pick the year nearest the 10th/50th/90th percentile of those
+       totals across years.  Runs in pure vectorised numpy; completes in
+       under one second per month.  (Until 2026-08-19 this was a
+       pooled-threshold KS-distance rule that never delivered the
+       requested P-levels -- see ``docs/percentile_methodology.md``
+       section 3.2.1.)
 
     3. **Mosaic** (``construct_and_save_mosaics``): for each month and
        percentile, assemble the best-year hourly data into a spatial
@@ -621,7 +627,7 @@ class CosmoRea6PercentileIndexer:
     Straggler-hiding optimisation: the load phase fires the KS callback
     for each month as soon as its last file arrives, so KS work for
     completed months overlaps with the tail of the I/O phase rather
-    than waiting for all 288 files.
+    than waiting for every file.
 
     Parameters
     ----------
@@ -783,7 +789,9 @@ class CosmoRea6PercentileIndexer:
         return monthly_registry, file_path_lookup
 
     # ------------------------------------------------------------------
-    # Phase 2: KS distribution matching
+    # Phase 2: representative-year selection (cumulative monthly GHI rank;
+    # the "_ks" method name is historical -- the KS rule was replaced
+    # 2026-08-19, see docs/percentile_methodology.md section 3.2.1)
     # ------------------------------------------------------------------
 
     def _compute_ks_for_month(
@@ -791,7 +799,7 @@ class CosmoRea6PercentileIndexer:
         month: int,
         monthly_registry: dict,
     ) -> dict:
-        """Run KS distribution matching for one month.
+        """Select the P10/P50/P90 source year per cell for one month.
 
         For each grid cell, totals that year's daily GHI sums and
         selects the year sitting nearest the 10th, 50th and 90th
@@ -988,7 +996,7 @@ class CosmoRea6PercentileIndexer:
         Discovers input files, pre-counts files per month, then runs
         the load phase.  As each month's files complete, the KS phase
         starts immediately for that month rather than waiting for all
-        288 files to finish (straggler hiding).  Finally runs the
+        files to finish (straggler hiding).  Finally runs the
         mosaic phase once all KS maps are ready.
 
         Raises

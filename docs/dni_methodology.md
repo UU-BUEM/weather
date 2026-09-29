@@ -14,10 +14,10 @@ for concentrating solar power (CSP) systems and parabolic trough models.
 COSMO-REA6 provides two radiation components directly on its 824 × 848
 rotated-pole grid at 1-hour intervals:
 
-| CR6 variable  | Meaning                               | Units |
-|---------------|---------------------------------------|-------|
-| `SWDIRS_RAD`  | Direct horizontal irradiance          | W/m²  |
-| `SWDIFDS_RAD` | Diffuse horizontal irradiance         | W/m²  |
+| CR6 variable  | Meaning                       | Units |
+| ------------- | ----------------------------- | ----- |
+| `SWDIRS_RAD`  | Direct horizontal irradiance  | W/m²  |
+| `SWDIFDS_RAD` | Diffuse horizontal irradiance | W/m²  |
 
 `SWDIRS_RAD` is the **direct beam projected onto a horizontal surface**,
 i.e. `SWDIRS_RAD = DNI × cos(θ_z)` where `θ_z` is the solar zenith angle.
@@ -81,12 +81,12 @@ Jean Meeus' *Astronomical Algorithms* (2nd ed., 1998) provides a more
 elaborate polynomial correction for solar declination and the equation of time,
 including terms for orbital eccentricity variation, nutation, and aberration.
 
-| Property           | Meeus               | Spencer (1971)     |
-|--------------------|---------------------|--------------------|
-| Accuracy           | ±0.01°              | ±0.1–0.3°          |
-| Implementation     | ~30 polynomial terms | 7 Fourier terms    |
-| Leap-year handling | Yes                 | Approximate        |
-| External dependency| None (pure math)    | None (pure math)   |
+| Property            | Meeus                | Spencer (1971)   |
+| ------------------- | -------------------- | ---------------- |
+| Accuracy            | ±0.01°               | ±0.1–0.3°        |
+| Implementation      | ~30 polynomial terms | 7 Fourier terms  |
+| Leap-year handling  | Yes                  | Approximate      |
+| External dependency | None (pure math)     | None (pure math) |
 
 **Why not used here:** The 30× higher accuracy is irrelevant for COSMO-REA6
 because the reanalysis grid uncertainty already dominates. The added
@@ -100,12 +100,12 @@ The NREL SPA (Reda & Andreas, 2004) is the gold standard for solar position
 calculations, with accuracy better than ±0.0003°. It is the algorithm used
 inside pvlib (`pvlib.solarposition.spa_python`).
 
-| Property           | NREL SPA            | Spencer (1971)     |
-|--------------------|---------------------|--------------------|
-| Accuracy           | < 0.0003°           | ±0.1–0.3°          |
-| Valid date range   | −2000 to +6000 CE   | ±1 year accurate   |
-| Vectorisation      | Requires pvlib      | Native NumPy/Dask  |
-| Speed (gridded)    | Very slow (see §3)  | Fast               |
+| Property         | NREL SPA           | Spencer (1971)    |
+| ---------------- | ------------------ | ----------------- |
+| Accuracy         | < 0.0003°          | ±0.1–0.3°         |
+| Valid date range | −2000 to +6000 CE  | ±1 year accurate  |
+| Vectorisation    | Requires pvlib     | Native NumPy/Dask |
+| Speed (gridded)  | Very slow (see §3) | Fast              |
 
 **Why not used here:** See §3 (pvlib vectorisation limitation).
 
@@ -271,7 +271,7 @@ decodes GRIB files using the ECMWF eccodes short-name table, which assigns
 different names for some variables:
 
 | COSMO-REA6 name | cfgrib / eccodes name | Description              |
-|-----------------|-----------------------|--------------------------|
+| --------------- | --------------------- | ------------------------ |
 | `PS`            | `sp`                  | Surface pressure         |
 | `H_SNOW`        | `sde`                 | Snow depth equivalent    |
 | `SNOW_GSP`      | `lssf`                | Large-scale snowfall     |
@@ -328,11 +328,11 @@ one grid cell for one month:
 A live run at an Arctic-edge cell (70.5°N, 25°E, June 2018) measured, at
 matched hourly resolution against COSMO's native DNI/DHI:
 
-| Estimate                             | bias (est−native) | MAE   | RMSE  | r      |
-| ------------------------------------- | -----------------: | ----: | ----: | -----: |
-| `DNI_pvlib_closure` (exact, SPA zenith) |             +0.15 W/m² | 0.90 W/m² |  7.19 W/m² | 0.9992 |
-| `DNI_pvlib_dirint` (GHI-only decomp.)  |            +11.53 W/m² | 24.82 W/m² | 43.81 W/m² | 0.9717 |
-| `DHI_pvlib_dirint` (GHI-only decomp.)  |             −2.15 W/m² |  8.69 W/m² | 16.87 W/m² | 0.9835 |
+| Estimate                                | bias (est−native) |        MAE |       RMSE |      r |
+| --------------------------------------- | ----------------: | ---------: | ---------: | -----: |
+| `DNI_pvlib_closure` (exact, SPA zenith) |        +0.15 W/m² |  0.90 W/m² |  7.19 W/m² | 0.9992 |
+| `DNI_pvlib_dirint` (GHI-only decomp.)   |       +11.53 W/m² | 24.82 W/m² | 43.81 W/m² | 0.9717 |
+| `DHI_pvlib_dirint` (GHI-only decomp.)   |        −2.15 W/m² |  8.69 W/m² | 16.87 W/m² | 0.9835 |
 
 This confirms both predictions exactly: the closure formula (same
 known GHI/DHI, only the solar-position algorithm differs) reproduces
@@ -366,10 +366,10 @@ the same exact closure formula re-run: `ds_dhi_swapped = SWDIRS_RAD`
 (pretending the direct field is diffuse), `swapped_DNI = (GHI -
 ds_dhi_swapped) / cos(θ_z)`. Result, same cell/month as above:
 
-| Labeling | bias | MAE | RMSE | r |
-| --- | ---: | ---: | ---: | ---: |
-| Correct (SWDIRS_RAD = direct) | +0.15 W/m² | 0.90 W/m² | 7.19 W/m² | 0.9992 |
-| Swapped | +174.19 W/m² | 227.32 W/m² | 268.24 W/m² | 0.2201 |
+| Labeling                      |         bias |         MAE |        RMSE |      r |
+| ----------------------------- | -----------: | ----------: | ----------: | -----: |
+| Correct (SWDIRS_RAD = direct) |   +0.15 W/m² |   0.90 W/m² |   7.19 W/m² | 0.9992 |
+| Swapped                       | +174.19 W/m² | 227.32 W/m² | 268.24 W/m² | 0.2201 |
 
 RMSE increases 37x and correlation collapses to near-noise under the
 swap — strong empirical confirmation, independent of any documentation
@@ -404,12 +404,12 @@ hourly API (`https://www.daggegevens.knmi.nl/klimatologie/uurgegevens`,
 and its hour divisions are hour-ending in UT — the same convention
 COSMO uses — so the two series align with no time shift.
 
-| station          | dist   | COSMO | KNMI | GHI bias | r      |
-|------------------|--------|-------|------|----------|--------|
-| 240 Schiphol     | 1.9 km | 1058  | 1153 | -8.23 %  | 0.9248 |
-| 260 De Bilt      | 2.6 km | 1049  | 1137 | -7.75 %  | 0.9319 |
-| 344 Rotterdam    | 3.3 km | 1072  | 1156 | -7.29 %  | 0.9252 |
-| 280 Eelde        | 2.2 km |  999  | 1114 | -10.33 % | 0.9267 |
+| station       | dist   | COSMO | KNMI | GHI bias | r      |
+| ------------- | ------ | ----- | ---- | -------- | ------ |
+| 240 Schiphol  | 1.9 km | 1058  | 1153 | -8.23 %  | 0.9248 |
+| 260 De Bilt   | 2.6 km | 1049  | 1137 | -7.75 %  | 0.9319 |
+| 344 Rotterdam | 3.3 km | 1072  | 1156 | -7.29 %  | 0.9252 |
+| 280 Eelde     | 2.2 km | 999   | 1114 | -10.33 % | 0.9267 |
 
 (annual GHI, kWh/m2/yr.) Temperature validates far better than
 radiation: bias -0.22 to +0.06 degC, r 0.978-0.989.
@@ -431,6 +431,20 @@ is 0.9026 and 99.7 W/m2, and the normalised diurnal shape error halves
 (0.0164 vs 0.0328). Consumers integrating sub-daily profiles should use
 the trapezoidal rule rather than treating each value as an hour-mean;
 annual totals are unaffected.
+
+**Superseded by the full runs (2026-08-24/26).** The four-station table
+above was the first check. `tests/validate_knmi.py` has since run
+against all 47 KNMI stations (32 with pyranometers) and against all
+three providers:
+
+- COSMO-REA6, 32 stations: GHI bias −9.7 %, r 0.926; by sky condition
+  overcast +7.1 %, broken −8.1 %, hazy −14.7 %, clear −14.2 % — the same
+  sign-reversal story, different magnitudes. Report:
+  `data/validation/NL/knmi_validation_2018.md`.
+- Instantaneous semantics confirmed at 100 % of stations.
+- ERA5-Land (+1.7 %, r 0.960) and MERRA-2 (+13.2 %, r 0.940) — see
+  [provider_differences.md §10](provider_differences.md) for the
+  cross-provider ranking and their measured `cell_methods`.
 
 ## 12. References
 

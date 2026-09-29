@@ -28,16 +28,19 @@ Pipeline flow
     pipeline.run_pipeline(year=YYYY, months=[1, 2, ...])
       │
       ├── Phase 1 — Bulk download (ThreadPoolExecutor, up to ncores
-      │     workers): all (month × attribute) .grb.bz2 files, verified
-      │     against DWD's Content-Length afterwards.
+      │     workers = simultaneous DWD connections): all (month ×
+      │     attribute) .grb.bz2 files, verified against DWD's
+      │     Content-Length afterwards. Keep ncores ~12: ~90 triggered a
+      │     storm of DWD 503s (docs/parallelization.md section 3).
       │
       ├── Phase 2 — Bulk decompress (ProcessPoolExecutor, up to ncores
       │     workers): all .grb.bz2 -> .grb, verified (GRIB magic bytes,
       │     expanded size) afterwards. Compressed files for the
       │     processed months are removed here when ``cleanup=True``.
       │
-      └── Phase 3 — Transform + Export, sequential per month (dask uses
-            all allocated cores within each month):
+      └── Phase 3 — Transform + Export, sequential per month (dask's
+            threaded scheduler, default pool = one thread per visible
+            CPU; NOT sized by ncores -- cap via DASK_NUM_WORKERS):
               transform.build_month_dataset
                   -> crop to crop_bbox's (y, x) window, if given (else
                      skipped entirely -- see .crop)
@@ -110,7 +113,13 @@ def run_pipeline(
     work_dir : Path, optional
         Override the root working directory.
     ncores : int, optional
-        Total worker budget (default: ``config["ncores"]``).
+        Download/verify thread count AND decompress process count
+        (default: ``config["ncores"]``, i.e. ``COSMO_NCORES``).  Because
+        it sets the number of simultaneous DWD connections, keep it
+        around 12 -- ``--ncores 90`` caused a storm of DWD 503 errors.
+        It does NOT size the transform: dask's threaded scheduler uses
+        its own default pool (all visible CPUs) unless
+        ``DASK_NUM_WORKERS`` is set.  See ``docs/parallelization.md``.
     include_wind_components : bool
         Keep raw U_10M / V_10M in each month's NetCDF (default ``True``).
     complevel : int

@@ -1,5 +1,11 @@
 # MERRA-2 bulk-run guidance and launch scripts
 
+**Status (2026-08):** the 1980–2025 archive (552 monthly files) is
+complete and verified on `sd26`; this guide is for extending or
+rebuilding it. It was built twice: 2026-07 with `--ncores 88` one year at
+a time (~5.6 h), and rebuilt 2026-08 on canonical variable names with
+`--ncores 24 --parallel-years 2`.
+
 ## The key insight: OPeNDAP has no per-account queue, so this is a different bottleneck than ERA5
 
 MERRA-2 is fetched via **OPeNDAP** (server-side spatial subsetting — no
@@ -13,8 +19,8 @@ tuning story relative to ERA5-Land:
   so a year is ~1095 small OPeNDAP requests rather than ERA5-Land's 12
   large GRIB downloads — many more requests, each individually much
   cheaper.
-- Measured this session (2018, `lnd` collection only — `rad`/`slv` already
-  cached): 372 daily files downloaded in 134.5 s; transform+export for
+- Measured during development (2018, `lnd` collection only — `rad`/`slv`
+  already cached): 372 daily files downloaded in 134.5 s; transform+export for
   all 12 months took 20.4 s. Even a **fresh** year (all 3 collections,
   ~1095 files) is expected to be on the order of minutes, not the
   CDS-queue-dominated tens-of-minutes-per-month ERA5-Land sees.
@@ -35,7 +41,7 @@ activation, `PYTHONPATH`, a timestamped log file, and an automatic
 `verify_merra2_months.py` QA pass over the whole archive afterward
 (mirrors `scripts/run_era5_bulk.sh` — see that script's header for the
 one real structural difference: MERRA-2 has no boundary-repair step,
-since `SWGDN` is already instantaneous, not accumulated):
+since `SWGDN` is already an hourly-mean rate, not accumulated):
 
 ```bash
 tmux new -s merra2
@@ -46,25 +52,22 @@ export MERRA2_OPENDAP_MAX_CONCURRENT=12   # no per-account queue -- raise freely
 
 bash scripts/run_merra2_bulk.sh \
     --from-year 1980 --to-year 2025 \
-    --ncores 80 --parallel-years 6 \
+    --ncores 24 --parallel-years 2 \
     --resume
 
 # detach: Ctrl-b then d      reattach: tmux attach -t merra2
 ```
 
-Before your first bulk run, read the pre-flight checklist in
-`docs/MERRA2_PIPELINE_GUIDE.md`'s "Bulk multi-year run" section — in
-particular, **sync your code first**: this session's `export_netcdf`
-skip-if-exists bug fix must be on the server before a fresh run,
-otherwise any month whose output already exists (e.g. from a prior
-partial attempt) will silently fail to update.
+Before a bulk run, read the pre-flight checklist in
+`docs/MERRA2_PIPELINE_GUIDE.md`'s "Bulk multi-year run" section, and
+`git pull` on the server so it runs the same code as your dev machine.
 
 ### 2. nohup (fire-and-forget, no wrapper script)
 
 ```bash
 nohup python src/weather/tests/test_merra2_multi_year.py \
     --from-year 1980 --to-year 2025 \
-    --ncores 80 --parallel-years 6 --resume \
+    --ncores 24 --parallel-years 2 --resume \
     > merra2_bulk.log 2>&1 &
 tail -f merra2_bulk.log
 ```
@@ -92,17 +95,17 @@ Each parallel year runs its own `download_all()` (up to
 `ProcessPoolExecutor`. Running N years at once multiplies *total*
 concurrent OPeNDAP requests by N — e.g. `--parallel-years 6` at the
 default `MERRA2_OPENDAP_MAX_CONCURRENT=8` means up to 48 concurrent
-requests server-wide. Not tested at that scale in this codebase; start
-with a small trial range (e.g. `--from-year 2015 --to-year 2018`)
-before committing to the full multi-decade range unattended.
+requests server-wide. Only `--parallel-years 2` has been used in
+production; start with a small trial range (e.g. `--from-year 2015
+--to-year 2018`) before trying more.
 
 ### Helps only up to a point: `--ncores`
 
 The transform phase parallelizes across months within a year
 (`ProcessPoolExecutor`, capped at 12 workers/year — one per month).
 Cores beyond `12 x parallel-years` are wasted, not harmful. MERRA-2's
-own transform step is fast (20.4 s for 12 months in this session's
-test) — this pipeline is I/O-bound, not compute-bound, so don't
+own transform step is fast (20.4 s for 12 months in a 2018 test) — this
+pipeline is I/O-bound, not compute-bound, so don't
 over-provision cores at the expense of `--parallel-years`.
 
 ### Does NOT apply here: "split across multiple accounts"
@@ -117,9 +120,9 @@ queue to route around via a second Earthdata login. One account, one
 ## Disk budget
 
 MERRA-2's Europe-cropped 0.5 deg x 0.625 deg grid is far smaller than
-ERA5-Land's 0.1 deg crop of the same box. Measured this session: a full
-2018 (12 months, 3 collections) output totaled well under 1.2 GB
-(individual monthly files 85-100 MB). Scaling to the full 1980-2025
+ERA5-Land's 0.1 deg crop of the same box. Measured: a full 2018 (12 months,
+3 collections) output totaled well under 1.2 GB (individual monthly
+files 85-100 MB). Scaling to the full 1980-2025
 range (46 years) puts the final NetCDF archive at roughly 40-50 GB --
 trivial against `sd26`'s 15 TB, and smaller than even a single year of
 COSMO-REA6's raw downloads. With `MERRA_CLEANUP=false` (the default --

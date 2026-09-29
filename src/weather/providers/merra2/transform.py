@@ -17,7 +17,9 @@ Design goals
   ERA5-Land, so downstream code (``common.merge``, percentile analysis)
   works unchanged.
 * **GHI is simpler than ERA5-Land's.**  MERRA-2's ``SWGDN`` is an
-  *instantaneous* flux, not an accumulated one — no de-accumulation, no
+  hourly-mean flux (time-averaged ``M2T1NXRAD`` collection, stamped at
+  the interval centre ``HH:30``), not an accumulated one — no
+  de-accumulation, no
   cross-month boundary bookkeeping is needed (unlike ERA5-Land's
   ``ssrd``).  GHI is derived via
   :func:`weather.common.derived_attributes.apply_derived_fields` with
@@ -233,7 +235,7 @@ def build_monthly_dataset(
     # Unit conversions (T2M K->degC).
     ds = _convert_units(ds)
 
-    # Derive hourly GHI = SWGDN directly (instantaneous, night-masked).
+    # Derive hourly GHI = SWGDN directly (hourly-mean rate, night-masked).
     # Only "GHI" is requested from the registry — NOT "DHI"/"DNI" — to
     # sidestep pvlib DIRINT's 1-D-per-site broadcasting limitation (see
     # module docstring).
@@ -256,8 +258,8 @@ def build_monthly_dataset(
             "long_name": "Global Horizontal Irradiance",
             "units": "W/m^2",
             "description": (
-                "SWGDN, night-masked (instantaneous, no de-accumulation "
-                "needed unlike ERA5-Land's ssrd)"
+                "SWGDN, night-masked (hourly-mean rate, no "
+                "de-accumulation needed unlike ERA5-Land's ssrd)"
             ),
             "derivation": "MERRA2 GHI = mask_night(SWGDN, zenith)",
         },

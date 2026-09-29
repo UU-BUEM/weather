@@ -25,11 +25,16 @@ file's transfer, so it is completely safe with
 
 ---
 
-## 2. Wire `fast_download.py` into `downloader.py`
+## 2. Parallel range-request download (implemented)
 
-Put `fast_download.py` in `src/weather/providers/era5_land/`.
+**Already wired in.** `providers/era5_land/fast_download.py` exists and
+`downloader.py::_download_result()` uses it for every finished CDS
+result, falling back to cdsapi's single-stream `download()` if the result
+URL can't be determined or the fast path fails. Setting
+`ERA5_DOWNLOAD_CONNECTIONS=1` disables it. The snippets below record the
+original change for reference; you do not need to apply them.
 
-In `downloader.py`, inside `_fetch`, replace the download line:
+The original patch replaced the download line in `_fetch`:
 
 ```python
 # OLD:
@@ -58,7 +63,7 @@ prints as `Downloading https://object-store.os-api.cci2.ecmwf.int/...`).
 If a future cdsapi renames it, use `result.url` or
 `result.get_results().location`.
 
-Add to `config.py`:
+And `config.py` gained:
 
 ```python
 "download_connections": int(
@@ -93,7 +98,7 @@ to the Python parallel path (and then to a single stream) otherwise.
 
 ### Tuning
 
-- `ERA5_DOWNLOAD_CONNECTIONS=8` is a good default.  16 may help on a fat
+- `ERA5_DOWNLOAD_CONNECTIONS=8` is the default.  16 may help on a fat
   pipe; beyond that you usually hit diminishing returns or server-side
   throttling.
 - Measure it: the new log line prints the achieved rate, e.g.

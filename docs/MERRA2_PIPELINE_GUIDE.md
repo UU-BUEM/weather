@@ -11,16 +11,24 @@ convention.
 
 MERRA-2 coverage: **1980 to present**.
 
+**Status (2026-08):** the full 1980–2025 archive (552 monthly files) is
+built and verified on `sd26`, on the current canonical variable names
+(`T`, `T_DEW`, `U_10M`/`V_10M`, `SNOW_DEPTH`, `SNOWFALL`, ...) with CF
+metadata, and P10/P50/P90 percentile mosaics (36 files) are done. The
+run instructions below are for extending or rebuilding it.
+
 ## Collections and attributes
 
-Three GES DISC collections cover the 13 downloaded attributes (one
-OPeNDAP request per collection per day):
+Three GES DISC collections cover the 14 downloaded attributes (one
+OPeNDAP request per collection per day). Raw names are listed here;
+`transform.py` renames them to the shared cross-provider names (see
+[provider_differences.md](provider_differences.md#attribute-naming-reference-raw-source---canonical-output)):
 
-| Collection             | Short key | Attributes                                             |
-|-------------------------|-----------|----------------------------------------------------------|
-| `M2T1NXRAD.5.12.4`      | `rad`     | `SWGDN` (-> GHI), `ALBEDO`                                |
-| `M2T1NXSLV.5.12.4`      | `slv`     | `T2M`, `QV2M`, `U2M`, `V2M`, `U10M`, `V10M`, `U50M`, `V50M`, `PS` |
-| `M2T1NXLND.5.12.4`      | `lnd`     | `SNODP`, `PRECSNOLAND`                                    |
+| Collection         | Short key | Attributes                                                                  |
+| ------------------ | --------- | --------------------------------------------------------------------------- |
+| `M2T1NXRAD.5.12.4` | `rad`     | `SWGDN` (-> GHI), `ALBEDO`                                                  |
+| `M2T1NXSLV.5.12.4` | `slv`     | `T2M`, `T2MDEW`, `QV2M`, `U2M`, `V2M`, `U10M`, `V10M`, `U50M`, `V50M`, `PS` |
+| `M2T1NXLND.5.12.4` | `lnd`     | `SNODP`, `PRECSNOLAND`                                                      |
 
 **Why `M2T1NXLND` (SNODP/PRECSNOLAND) and `U50M`/`V50M` were added.**
 This was originally scoped out — a 3rd collection means one more
@@ -143,7 +151,8 @@ onto the other's index), rather than assuming the raw indices match.
 Unlike ERA5-Land's accumulated `ssrd` (which needs de-accumulation and
 month-boundary repair — see `providers/era5_land/boundary_repair.py`),
 MERRA-2's
-`SWGDN` is an **instantaneous** flux. GHI is simply `SWGDN`,
+`SWGDN` is an **hourly-mean** flux (a rate, time-averaged over the hour
+and stamped at `HH:30`) — not an accumulation. GHI is simply `SWGDN`,
 night-masked via `weather.common.derived_attributes.apply_derived_fields
 (ds, "MERRA2", sol_pos, times, fields=["GHI"])`. No boundary bookkeeping
 is needed at all.
@@ -201,15 +210,9 @@ python src/weather/tests/test_merra2_one_year.py --year 2018 --ncores 8
 
 Before starting, on `sd26`:
 
-1. **Sync code.** This session's fixes (the `lnd`-collection live
-   verification, the `export_netcdf` skip-if-exists bug fix, and the
-   `COSMO_CLEANUP`/`ERA5_CLEANUP`/`MERRA_CLEANUP` centralization) are
-   local, uncommitted changes on the dev machine as of this writing —
-   commit + push, then `git pull` on `sd26`, before starting a fresh
-   1980-2025 run. Running without the `export_netcdf` fix means any
-   month whose output file already exists (e.g. from a prior partial
-   attempt) will silently fail to update, exactly the bug this session
-   found.
+1. **Sync code.** `git pull` on `sd26` so the server runs the same
+   commit as your dev machine. Stale checkouts have caused real problems
+   before (legacy variable names, missing atomic export).
 2. **Check credentials.** `EARTHDATA_USERNAME`/`EARTHDATA_PASSWORD` (or
    `~/.netrc`) must be set up on `sd26`, not just this dev machine.
 3. **Check disk.** MERRA-2's full 1980-2025 footprint is modest — the
@@ -231,7 +234,7 @@ mkdir -p logs
 
 python src/weather/tests/test_merra2_multi_year.py \
     --from-year 1980 --to-year 2025 \
-    --ncores 80 --parallel-years 6 \
+    --ncores 24 --parallel-years 2 \
     --resume \
     2>&1 | tee -a "logs/merra2_multi_year_$(date +%Y%m%d_%H%M%S).log"
 
@@ -244,18 +247,16 @@ Notes on the flags:
   the first — it only skips a *year* whose all-12-months output already
   exists (`_all_monthly_exist()`), so it's the right default for both
   a fresh start and any later restart after an interruption.
-- **`--ncores 80 --parallel-years 6`** leaves headroom on `sd26`'s 94
-  cores for other users/jobs, and divides into ~13 cores/year — close
-  to the useful ceiling, since each year's transform phase only ever
-  parallelizes across 12 months (`ProcessPoolExecutor` caps at
-  `min(ncores_per_year, 12)`; cores beyond that per year are wasted, not
-  harmful). Push `--parallel-years` down (e.g. to 4) if `sd26` is shared
-  with other work at the time, since 6 years running concurrently each
-  also issue up to `MERRA2_OPENDAP_MAX_CONCURRENT` (default 8) requests
-  against GES DISC — 6x8=48 concurrent requests is probably fine (no
-  CDS-style per-account queue) but has not been tested at this scale;
-  watch the first hour of logs for repeated timeouts/retries before
-  trusting it unattended overnight.
+- **`--ncores 24 --parallel-years 2`** is the configuration the
+  2026-08 production rebuild actually used (after a 2-year smoke
+  test). Each year gets 12 cores, exactly the transform's ceiling
+  (`ProcessPoolExecutor` caps at `min(ncores_per_year, 12)` — one per
+  month; more cores per year are idle). The original 2026-07 build ran
+  `--ncores 88` with one year at a time (~5.6 h for 46 years).
+  Higher `--parallel-years` multiplies concurrent GES DISC requests
+  (P x `MERRA2_OPENDAP_MAX_CONCURRENT`, default 8) and has not been
+  tested; if you try it, watch the first hour of logs for repeated
+  timeouts/retries.
 - **No `--cleanup`** — matches the new centralized default (keep
   everything; see `.claude/open.md`'s cleanup-centralization entry).
 - The `tee` redirect keeps a persistent, timestamped log outside the
@@ -265,12 +266,9 @@ Notes on the flags:
   rad/slv already cached) took ~173 s. A **fresh** year (all 3
   collections, ~1095 daily files) will take meaningfully longer —
   budget roughly 8-10 minutes/year sequentially as a rough planning
-  number; `--parallel-years 6` should cut wall-clock time
-  substantially, though the actual speedup depends on how GES DISC
-  responds to sustained concurrent load, which hasn't been measured at
-  this scale. Consider a small trial first (e.g. `--from-year 2015
-  --to-year 2018`) to sanity-check throughput before committing to the
-  full 46-year range unattended.
+  number (the measured full 46-year sequential run took ~5.6 h, i.e.
+  ~7 min/year). Consider a small trial first (e.g. `--from-year 2015
+  --to-year 2018`) before committing to a long range unattended.
 
 Unlike ERA5-Land's CDS queue (effectively 1 job/account), GES DISC's
 OPeNDAP server has no per-account job queue — `MERRA2_OPENDAP_MAX_CONCURRENT`
