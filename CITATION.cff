@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+title: "Weather: provider-based weather data processing pipeline"
+abstract: "Provider-based weather data processing pipeline for the COSMO-REA6, MERRA-2 and ERA5-Land reanalyses, part of UU-BUEM."
+authors:
+  - family-names: Sahoo
+    given-names: Somadutta
+    email: s.sahoo@uu.nl
+    affiliation: Utrecht University
+repository-code: "https://github.com/UU-BUEM/weather"
+license: MIT
+keywords:
+  - weather
+  - climate
+  - COSMO-REA6
+  - MERRA-2
+  - ERA5
+  - reanalysis
+  - HPC
+  - NetCDF

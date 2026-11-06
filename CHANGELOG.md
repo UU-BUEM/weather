@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.10.2] - 2026-11-06
+
+### Added
+
+- `CITATION.cff`: citation metadata for GitHub's "Cite this
+  repository" button and for Zenodo, which archives every release
+  from this version on and issues it a DOI.
+
+---
+
 ## [1.10.1] - 2026-09-29
 
 ### Changed
