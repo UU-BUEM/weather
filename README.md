@@ -215,6 +215,9 @@ from weather import get_point_weather
 
 df = get_point_weather(52.0, 5.0, 2018, provider="era5-land")
 # df: hourly DatetimeIndex, columns T (degC), GHI/DHI/DNI (W/m2)
+
+df = get_point_weather(52.0, 5.0, 2018, provider="merra-2", wind=True)
+# ... plus WS_10M (m/s), the 10 m wind speed (e.g. PV module temperature)
 ```
 
 Install just enough for this (no GRIB/download stack): `pip install

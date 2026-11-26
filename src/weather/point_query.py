@@ -3,7 +3,8 @@
 This module does **not** download or process data itself — it only opens
 NetCDF files that a prior ``weather run --provider ... --year ...`` (or
 equivalent pipeline call) already produced, and extracts the nearest grid
-cell's ``T``/``GHI``/``DHI``/``DNI`` for one ``(latitude, longitude, year)``.
+cell's ``T``/``GHI``/``DHI``/``DNI`` (and, on request, the 10 m wind speed
+``WS_10M``) for one ``(latitude, longitude, year)``.
 This keeps it import-light: only ``numpy``/``pandas``/``xarray``/``netcdf4``
 (the ``pointquery`` extra) plus ``pvlib`` (the ``solar`` extra) for DNI/DHI
 reconstruction — never the GRIB/download/transform pipeline stack
@@ -15,6 +16,8 @@ Typical usage::
 
     df = get_point_weather(52.0, 5.0, 2018, provider="era5-land")
     # df: DatetimeIndex, columns T (degC), GHI/DHI/DNI (W/m2)
+    df = get_point_weather(52.0, 5.0, 2018, provider="merra-2", wind=True)
+    # ... plus WS_10M (m/s), e.g. for PV module temperature
 """
 
 from __future__ import annotations
@@ -47,6 +50,17 @@ _OUTPUT_SUBDIR: dict[str, str] = {
 }
 
 _REQUIRED_COLUMNS = ("T", "GHI", "DHI", "DNI")
+WIND_COLUMN = "WS_10M"
+
+# 10 m wind components per provider/archive generation, used when an
+# archive has no ready-made WS_10M (ERA5-Land exports u10/v10 only). The
+# speed is the vector magnitude, so it is the same whether the components
+# are geographic or grid-relative (COSMO's rotated pole).
+_WIND_COMPONENTS: tuple[tuple[str, str], ...] = (
+    ("u10", "v10"),
+    ("U10M", "V10M"),
+    ("U_10M", "V_10M"),
+)
 
 
 def _import_xarray() -> Any:
@@ -77,13 +91,38 @@ def _output_dir(canonical: str, data_dir: Path | str | None) -> Path:
 
 
 def _finalize(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize the index to tz-naive and select the canonical columns."""
+    """Normalize the index to tz-naive and select the canonical columns
+    (plus ``WS_10M`` when it was requested and is therefore present)."""
     idx = pd.DatetimeIndex(df.index)
     if idx.tz is not None:
         idx = idx.tz_convert(None)
     df = df.copy()
     df.index = idx
-    return df[list(_REQUIRED_COLUMNS)]
+    columns = list(_REQUIRED_COLUMNS)
+    if WIND_COLUMN in df:
+        columns.append(WIND_COLUMN)
+    return df[columns]
+
+
+def _wind_speed_series(cell: Any, source: str) -> pd.Series:
+    """Return the 10 m wind speed (m/s) of one extracted cell.
+
+    Uses the archive's own ``WS_10M`` where it has one (MERRA-2,
+    COSMO-REA6), else the magnitude of its 10 m u/v components
+    (ERA5-Land's ``u10``/``v10``).
+    """
+    if WIND_COLUMN in cell:
+        return cell[WIND_COLUMN].to_series()
+    for u_name, v_name in _WIND_COMPONENTS:
+        if u_name in cell and v_name in cell:
+            u = cell[u_name].to_series()
+            v = cell[v_name].to_series()
+            return (u**2 + v**2) ** 0.5
+    pairs = ", ".join("/".join(pair) for pair in _WIND_COMPONENTS)
+    raise KeyError(
+        f"{source} has no 10 m wind speed: neither {WIND_COLUMN} nor a "
+        f"u/v component pair ({pairs})."
+    )
 
 
 def _strip_tz(series: pd.Series) -> pd.Series:
@@ -176,6 +215,7 @@ def _get_point_regular_grid(
     filename_glob: str,
     legacy_pressure_var: str,
     legacy_temperature_var: str,
+    wind: bool = False,
 ) -> pd.DataFrame:
     """Shared point extraction for ERA5-Land/MERRA-2's regular lat/lon grid.
 
@@ -209,6 +249,7 @@ def _get_point_regular_grid(
     ghi_parts: list[pd.Series] = []
     t_parts: list[pd.Series] = []
     ps_parts: list[pd.Series] = []
+    ws_parts: list[pd.Series] = []
     cell_lat, cell_lon = latitude, longitude
     for p in paths:
         with xr.open_dataset(str(p)) as raw:
@@ -226,6 +267,8 @@ def _get_point_regular_grid(
             t_parts.append(cell["T"].to_series())
             if "PS" in cell:
                 ps_parts.append(cell["PS"].to_series())
+            if wind:
+                ws_parts.append(_wind_speed_series(cell, p.name))
             cell_lat = float(cell["latitude"])
             cell_lon = float(cell["longitude"])
 
@@ -253,11 +296,18 @@ def _get_point_regular_grid(
     )
     dni = _strip_tz(dni_dhi["DNI"])
     dhi = _strip_tz(dni_dhi["DHI"])
-    return _finalize(pd.DataFrame({"T": t, "GHI": ghi, "DNI": dni, "DHI": dhi}))
+    columns = {"T": t, "GHI": ghi, "DNI": dni, "DHI": dhi}
+    if wind:
+        columns[WIND_COLUMN] = pd.concat(ws_parts).sort_index()
+    return _finalize(pd.DataFrame(columns))
 
 
 def _get_point_era5_land(
-    latitude: float, longitude: float, year: int, data_dir: Path | str | None
+    latitude: float,
+    longitude: float,
+    year: int,
+    data_dir: Path | str | None,
+    wind: bool = False,
 ) -> pd.DataFrame:
     return _get_point_regular_grid(
         latitude, longitude, year, data_dir,
@@ -265,11 +315,16 @@ def _get_point_era5_land(
         filename_glob=f"ERA5_LAND_{year}_??_all_attrs.nc",
         legacy_pressure_var="sp",
         legacy_temperature_var="t2m",
+        wind=wind,
     )
 
 
 def _get_point_merra2(
-    latitude: float, longitude: float, year: int, data_dir: Path | str | None
+    latitude: float,
+    longitude: float,
+    year: int,
+    data_dir: Path | str | None,
+    wind: bool = False,
 ) -> pd.DataFrame:
     return _get_point_regular_grid(
         latitude, longitude, year, data_dir,
@@ -277,11 +332,16 @@ def _get_point_merra2(
         filename_glob=f"MERRA2_{year}_??_all_attrs.nc",
         legacy_pressure_var="PS",
         legacy_temperature_var="T2M",
+        wind=wind,
     )
 
 
 def _get_point_cosmo_rea6(
-    latitude: float, longitude: float, year: int, data_dir: Path | str | None
+    latitude: float,
+    longitude: float,
+    year: int,
+    data_dir: Path | str | None,
+    wind: bool = False,
 ) -> pd.DataFrame:
     xr = _import_xarray()
     out_dir = _output_dir("cosmo-rea6", data_dir)
@@ -332,6 +392,12 @@ def _get_point_cosmo_rea6(
     cells = [d.isel(y=iy, x=ix) for d in datasets]
     ghi = pd.concat([c["GHI"].to_series() for c in cells]).sort_index()
     t = pd.concat([_temperature_series(c, "T_2M") for c in cells]).sort_index()
+    ws = (
+        pd.concat([_wind_speed_series(c, f"cosmo-rea6 {year}") for c in cells])
+        .sort_index()
+        if wind
+        else None
+    )
     for d in datasets:
         d.close()
 
@@ -349,7 +415,10 @@ def _get_point_cosmo_rea6(
     )
     dni = _strip_tz(dni_dhi["DNI"])
     dhi = _strip_tz(dni_dhi["DHI"])
-    return _finalize(pd.DataFrame({"T": t, "GHI": ghi, "DNI": dni, "DHI": dhi}))
+    columns = {"T": t, "GHI": ghi, "DNI": dni, "DHI": dhi}
+    if ws is not None:
+        columns[WIND_COLUMN] = ws
+    return _finalize(pd.DataFrame(columns))
 
 
 _DISPATCH = {
@@ -366,6 +435,7 @@ def get_point_weather(
     *,
     provider: str = "era5-land",
     data_dir: Path | str | None = None,
+    wind: bool = False,
 ) -> pd.DataFrame:
     """Return an hourly T/GHI/DHI/DNI DataFrame for one location/year.
 
@@ -387,12 +457,19 @@ def get_point_weather(
         Directory containing the provider's already-exported ``.nc``
         files. Defaults to that provider's own ``<work_dir>/output``
         convention (``weather.common.env.data_root()/<provider>/output``).
+    wind : bool
+        Also return ``WS_10M``, the 10 m wind speed in m/s (default
+        ``False``: the four columns only). Taken from the archive's own
+        ``WS_10M`` (MERRA-2, COSMO-REA6) or computed as the magnitude of
+        its 10 m u/v components (ERA5-Land). Used e.g. for PV module
+        temperature (PVWatts), not for wind power.
 
     Returns
     -------
     pandas.DataFrame
         Tz-naive hourly ``DatetimeIndex``, columns ``T`` (degC), ``GHI``,
-        ``DHI``, ``DNI`` (all W/m^2).
+        ``DHI``, ``DNI`` (all W/m^2), plus ``WS_10M`` (m/s) with
+        ``wind=True``.
 
     Raises
     ------
@@ -401,6 +478,9 @@ def get_point_weather(
     FileNotFoundError
         If no processed archive exists for *(provider, year)* under
         *data_dir*.
+    KeyError
+        With ``wind=True``, if an archive file has no 10 m wind speed
+        or u/v components.
     ImportError
         If the ``pointquery`` (xarray/netcdf4) or ``solar`` (pvlib)
         extras are not installed.
@@ -411,4 +491,4 @@ def get_point_weather(
         available = ", ".join(sorted(set(_ALIASES.values())))
         raise ValueError(f"Unknown provider: {provider!r}. Available: {available}")
 
-    return _DISPATCH[canonical](latitude, longitude, year, data_dir)
+    return _DISPATCH[canonical](latitude, longitude, year, data_dir, wind=wind)

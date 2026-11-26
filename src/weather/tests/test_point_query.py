@@ -240,3 +240,95 @@ class TestGetPointWeatherCosmo:
 
         with pytest.raises(KeyError):
             get_point_weather(50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir)
+
+
+class TestGetPointWeatherWind:
+    """``wind=True`` adds WS_10M (m/s): read directly, or from u/v components."""
+
+    @staticmethod
+    def _write(tmp_path, subdir, filename, hourly_times, extra):
+        shape = (len(hourly_times), 3, 3)
+        data = {
+            "GHI": (("time", "y", "x"), _synthetic_ghi(hourly_times, shape)),
+            "T": (("time", "y", "x"), 15 + np.zeros(shape)),
+        }
+        for name, value in extra.items():
+            data[name] = (("time", "y", "x"), value + np.zeros(shape))
+        ds = xr.Dataset(
+            data,
+            coords={
+                "time": hourly_times,
+                "y": np.arange(3),
+                "x": np.arange(3),
+                "latitude": ("y", np.array([50.0, 50.1, 50.2])),
+                "longitude": ("x", np.array([4.0, 4.1, 4.2])),
+            },
+        )
+        out_dir = tmp_path / subdir / "output"
+        out_dir.mkdir(parents=True)
+        ds.to_netcdf(out_dir / filename)
+        return out_dir
+
+    def test_default_has_no_wind_column(self, tmp_path, hourly_times) -> None:
+        out_dir = self._write(
+            tmp_path, "merra2", "MERRA2_2018_06_all_attrs.nc", hourly_times, {"WS_10M": 4.0}
+        )
+        df = get_point_weather(50.05, 4.05, 2018, provider="merra2", data_dir=out_dir)
+        assert list(df.columns) == REQUIRED_COLUMNS
+
+    def test_merra2_reads_ws_10m(self, tmp_path, hourly_times) -> None:
+        out_dir = self._write(
+            tmp_path, "merra2", "MERRA2_2018_06_all_attrs.nc", hourly_times, {"WS_10M": 4.0}
+        )
+        df = get_point_weather(
+            50.05, 4.05, 2018, provider="merra2", data_dir=out_dir, wind=True
+        )
+        assert list(df.columns) == REQUIRED_COLUMNS + ["WS_10M"]
+        assert np.allclose(df["WS_10M"], 4.0)
+
+    def test_era5_land_wind_from_components(self, tmp_path, hourly_times) -> None:
+        out_dir = self._write(
+            tmp_path,
+            "era5_land",
+            "ERA5_LAND_2018_06_all_attrs.nc",
+            hourly_times,
+            {"u10": 3.0, "v10": -4.0},
+        )
+        df = get_point_weather(
+            50.05, 4.05, 2018, provider="era5-land", data_dir=out_dir, wind=True
+        )
+        assert np.allclose(df["WS_10M"], 5.0)
+
+    def test_cosmo_reads_ws_10m(self, tmp_path, hourly_times) -> None:
+        shape = (len(hourly_times), 3, 3)
+        ds = xr.Dataset(
+            {
+                "T": (("time", "y", "x"), 15 + np.zeros(shape)),
+                "GHI": (("time", "y", "x"), _synthetic_ghi(hourly_times, shape)),
+                "WS_10M": (("time", "y", "x"), 2.5 + np.zeros(shape)),
+            },
+            coords={
+                "time": hourly_times,
+                "y": np.arange(3),
+                "x": np.arange(3),
+                "latitude": (("y", "x"), np.array([[50.0, 50.1, 50.2]] * 3)),
+                "longitude": (("y", "x"), np.array([[4.0, 4.1, 4.2]] * 3).T),
+            },
+        )
+        out_dir = tmp_path / "cosmo_rea6" / "output"
+        out_dir.mkdir(parents=True)
+        ds.to_netcdf(out_dir / "COSMO_REA6_2018_annual_all_attrs.nc")
+        df = get_point_weather(
+            50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir, wind=True
+        )
+        assert list(df.columns) == REQUIRED_COLUMNS + ["WS_10M"]
+        assert np.allclose(df["WS_10M"], 2.5)
+
+    def test_missing_wind_raises(self, tmp_path, hourly_times) -> None:
+        out_dir = self._write(
+            tmp_path, "merra2", "MERRA2_2018_06_all_attrs.nc", hourly_times, {}
+        )
+        with pytest.raises(KeyError, match="10 m wind speed"):
+            get_point_weather(
+                50.05, 4.05, 2018, provider="merra2", data_dir=out_dir, wind=True
+            )
