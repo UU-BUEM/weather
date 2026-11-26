@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.11.0] - 2026-11-26
+
+### Added
+
+- `get_point_weather(..., wind=True)` also returns `WS_10M`, the 10 m wind
+  speed in m/s, for the same nearest cell: the archive's own `WS_10M`
+  (MERRA-2, COSMO-REA6) or the magnitude of its 10 m u/v components
+  (ERA5-Land `u10`/`v10`). Opt-in: the default output is unchanged
+  (`T`, `GHI`, `DHI`, `DNI`). Used by conversion-technologies' PV profiles
+  (PVWatts needs the wind speed for the module temperature). A file with
+  neither raises `KeyError`.
+
+---
+
 ## [1.10.2] - 2026-11-06
 
 ### Added
